@@ -1,0 +1,28 @@
+# general
+.env
+.env.*
+node_modules
+.next
+out
+__pycache__
+*.pyc
+.venv
+venv
+.DS_Store
+.bedrock_agentcore
+.bedrock_agentcore.yaml
+.pytest_cache
+.mypy_cache
+.ruff_cache
+dist
+coverage
+*.sqlite
+*.db
+.vscode
+.idea
+
+# logs
+*.log
+
+# build
+build

@@ -1,0 +1,16 @@
+{
+  "users": [
+    {"id": "user_demo", "email": "demo@jars.local"}
+  ],
+  "jars": [
+    {"id": "jar_emergency", "user_id": "user_demo", "name": "Emergency Buffer", "target_amount": 20000000},
+    {"id": "jar_house", "user_id": "user_demo", "name": "House Goal", "target_amount": 650000000}
+  ],
+  "categories": [
+    {"id": "cat_essentials", "name": "Essentials"},
+    {"id": "cat_rent", "name": "Rent", "parent_id": "cat_essentials"}
+  ],
+  "transactions": [
+    {"id": "txn_1", "user_id": "user_demo", "jar_id": "jar_house", "category_id": "cat_rent", "amount": 5500000, "counterparty": "Techcombank"}
+  ]
+}

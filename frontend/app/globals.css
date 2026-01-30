@@ -1,0 +1,65 @@
+﻿@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --page-gradient: radial-gradient(circle at 10% 20%, #f8f5ef 0%, #f2f5f7 35%, #edf1f6 100%);
+}
+
+body {
+  @apply bg-mist text-ink font-display antialiased;
+  background: var(--page-gradient);
+}
+
+.card {
+  @apply rounded-3xl bg-white/85 backdrop-blur border border-slate/10 shadow-card;
+}
+
+.section-title {
+  @apply text-lg uppercase tracking-[0.2em] text-slate/60;
+}
+
+.subtle {
+  @apply text-sm text-slate/70;
+}
+
+.badge {
+  @apply inline-flex items-center rounded-full border border-slate/20 px-3 py-1 text-xs uppercase tracking-[0.18em];
+}
+
+.input {
+  @apply w-full rounded-2xl border border-slate/20 bg-white/90 px-4 py-3 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-teal/40;
+}
+
+.button {
+  @apply inline-flex items-center justify-center rounded-2xl bg-ink px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate;
+}
+
+.button-secondary {
+  @apply inline-flex items-center justify-center rounded-2xl border border-slate/30 bg-white/80 px-5 py-3 text-sm font-semibold text-ink transition hover:border-slate/60;
+}
+
+.table {
+  @apply w-full border-collapse text-sm;
+}
+
+.table th {
+  @apply text-left text-xs uppercase tracking-[0.2em] text-slate/50 pb-2;
+}
+
+.table td {
+  @apply py-2 border-b border-slate/10;
+}
+
+.chat-bubble {
+  @apply rounded-3xl px-4 py-3 text-sm leading-relaxed;
+}
+
+.chat-user {
+  @apply bg-ink text-white;
+}
+
+.chat-agent {
+  @apply bg-sand text-ink border border-slate/10;
+}
