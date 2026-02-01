@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { createServer } from "node:http";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -13,12 +14,20 @@ import {
 } from "@aws-sdk/client-bedrock-agent-runtime";
 
 // AWS client initialization
+const hasStaticCreds =
+  Boolean(process.env.AWS_ACCESS_KEY_ID) &&
+  Boolean(process.env.AWS_SECRET_ACCESS_KEY);
+
 const bedrockClient = new BedrockAgentRuntimeClient({
   region: process.env.AWS_REGION,
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
-  },
+  ...(hasStaticCreds
+    ? {
+        credentials: {
+          accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+          secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+        },
+      }
+    : {}),
 });
 
 interface RAGSource {
@@ -153,14 +162,45 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
-// Server startup
-async function runServer() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error("AWS KB Retrieval Server running on stdio");
-}
+// Server startup (SSE over HTTP)
+const transports = new Map<string, SSEServerTransport>();
 
-runServer().catch((error) => {
-  console.error("Fatal error running server:", error);
-  process.exit(1);
+const httpServer = createServer(async (req, res) => {
+  try {
+    if (!req.url) {
+      res.writeHead(400).end("Missing URL");
+      return;
+    }
+
+    const url = new URL(req.url, `http://${req.headers.host}`);
+
+    if (req.method === "GET" && url.pathname === "/sse") {
+      const transport = new SSEServerTransport("/message", res);
+      transports.set(transport.sessionId, transport);
+      transport.onclose = () => transports.delete(transport.sessionId);
+      await server.connect(transport);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/message") {
+      const sessionId = url.searchParams.get("sessionId");
+      if (!sessionId || !transports.has(sessionId)) {
+        res.writeHead(400).end("Invalid or missing sessionId");
+        return;
+      }
+      const transport = transports.get(sessionId)!;
+      await transport.handlePostMessage(req, res);
+      return;
+    }
+
+    res.writeHead(404).end("Not found");
+  } catch (error) {
+    console.error("HTTP server error:", error);
+    res.writeHead(500).end("Internal server error");
+  }
+});
+
+const port = Number.parseInt(process.env.PORT || "3000", 10);
+httpServer.listen(port, () => {
+  console.error(`AWS KB Retrieval Server listening on :${port} (SSE)`);
 });
