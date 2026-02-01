@@ -24,9 +24,18 @@ def _stream_local(prompt: str) -> Generator[str, None, None]:
     yield f"data: Trace: trc_{uuid.uuid4().hex[:8]}\n\n"
 
 
-def _invoke_agentcore(prompt: str, bearer_token: Optional[str]) -> Generator[str, None, None]:
+def _invoke_agentcore(
+    prompt: str,
+    bearer_token: Optional[str],
+    user_id: Optional[str],
+) -> Generator[str, None, None]:
     agent_arn = os.getenv("AGENTCORE_RUNTIME_ARN")
     region = os.getenv("AWS_REGION", "us-east-1")
+    payload = {"prompt": prompt}
+    if bearer_token:
+        payload["authorization"] = bearer_token
+    if user_id:
+        payload["user_id"] = user_id
     if agent_arn:
         try:
             escaped_arn = requests.utils.quote(agent_arn, safe="")
@@ -42,7 +51,7 @@ def _invoke_agentcore(prompt: str, bearer_token: Optional[str]) -> Generator[str
                 url,
                 params={"qualifier": "DEFAULT"},
                 headers=headers,
-                json={"prompt": prompt},
+                json=payload,
                 timeout=100,
                 stream=True,
             )
@@ -86,7 +95,7 @@ def _invoke_agentcore(prompt: str, bearer_token: Optional[str]) -> Generator[str
         response = requests.post(
             local_url,
             headers={"Content-Type": "application/json"},
-            json={"prompt": prompt},
+            json=payload,
             timeout=60,
         )
         response.raise_for_status()
@@ -115,6 +124,6 @@ def stream_chat(
             detail="Missing Authorization header for AgentCore Runtime (JWT required).",
         )
     return StreamingResponse(
-        _invoke_agentcore(payload.prompt, authorization),
+        _invoke_agentcore(payload.prompt, authorization, user.get("sub") if user else None),
         media_type="text/event-stream",
     )

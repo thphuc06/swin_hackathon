@@ -1,177 +1,80 @@
 # AWS Knowledge Base Retrieval MCP Server
 
-An MCP server implementation for retrieving information from the AWS Knowledge Base using the Bedrock Agent Runtime.
+Custom MCP server for retrieving context from Amazon Bedrock Knowledge Bases.
+Used by the AgentCore Gateway in this repo.
 
 ## Features
 
-- **RAG (Retrieval-Augmented Generation)**: Retrieve context from the AWS Knowledge Base based on a query and a Knowledge Base ID.
-- **Supports multiple results retrieval**: Option to retrieve a customizable number of results.
+- **RAG retrieval** from Knowledge Bases for Bedrock
+- **JSON-RPC** endpoint for Gateway integration
+- **SSE** transport for MCP clients
 
-## Tools
+## Tool
 
 - **retrieve_from_aws_kb**
-  - Perform retrieval operations using the AWS Knowledge Base.
   - Inputs:
-    - `query` (string): The search query for retrieval.
-    - `knowledgeBaseId` (string): The ID of the AWS Knowledge Base.
-    - `n` (number, optional): Number of results to retrieve (default: 3).
+    - `query` (string): search query
+    - `knowledgeBaseId` (string): Knowledge Base ID
+    - `n` (number, optional): number of results (default: 3)
+
+## Endpoints
+
+- `POST /mcp` JSON-RPC (recommended for Gateway)
+- `GET /mcp` health text
+- `GET /mcp/sse` (or `/sse`) SSE transport
+- `POST /mcp/message` (or `/message`) SSE message channel
 
 ## Configuration
 
-### Setting up AWS Credentials
+Environment variables:
 
-1. Obtain AWS access key ID, secret access key, and region from the AWS Management Console.
-2. Ensure these credentials have appropriate permissions for Bedrock Agent Runtime operations.
+- `AWS_REGION` (required)
+- `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (optional, for static creds)
+- `PORT` (optional, default: 3000)
 
-### Usage with Claude Desktop
+If static creds are not set, the AWS SDK uses the default credential chain.
 
-Add this to your `claude_desktop_config.json`:
+## Run locally
 
-#### Docker
-
-```json
-{
-  "mcpServers": {
-    "aws-kb-retrieval": {
-      "command": "docker",
-      "args": [
-        "run",
-        "-i",
-        "--rm",
-        "-e",
-        "AWS_ACCESS_KEY_ID",
-        "-e",
-        "AWS_SECRET_ACCESS_KEY",
-        "-e",
-        "AWS_REGION",
-        "mcp/aws-kb-retrieval-server"
-      ],
-      "env": {
-        "AWS_ACCESS_KEY_ID": "YOUR_ACCESS_KEY_HERE",
-        "AWS_SECRET_ACCESS_KEY": "YOUR_SECRET_ACCESS_KEY_HERE",
-        "AWS_REGION": "YOUR_AWS_REGION_HERE"
-      }
-    }
-  }
-}
+```bash
+cd src/aws-kb-retrieval-server
+npm install
+npm run build
+node dist/index.js
 ```
 
-```json
-{
-  "mcpServers": {
-    "aws-kb-retrieval": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-aws-kb-retrieval"],
-      "env": {
-        "AWS_ACCESS_KEY_ID": "YOUR_ACCESS_KEY_HERE",
-        "AWS_SECRET_ACCESS_KEY": "YOUR_SECRET_ACCESS_KEY_HERE",
-        "AWS_REGION": "YOUR_AWS_REGION_HERE"
-      }
-    }
-  }
-}
+Example JSON-RPC test:
+
+```bash
+curl -s http://localhost:3000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":"tools-1","method":"tools/list"}'
 ```
 
-### Usage with VS Code
+## Docker
 
-For quick installation, use one of the one-click install buttons below...
+Build from repo root:
 
-[![Install with NPX in VS Code](https://img.shields.io/badge/VS_Code-NPM-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=aws-kb-retrieval&inputs=%5B%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22aws_access_key%22%2C%22description%22%3A%22AWS%20Access%20Key%20ID%22%2C%22password%22%3Atrue%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22aws_secret_key%22%2C%22description%22%3A%22AWS%20Secret%20Access%20Key%22%2C%22password%22%3Atrue%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22aws_region%22%2C%22description%22%3A%22AWS%20Region%22%7D%5D&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40modelcontextprotocol%2Fserver-aws-kb-retrieval%22%5D%2C%22env%22%3A%7B%22AWS_ACCESS_KEY_ID%22%3A%22%24%7Binput%3Aaws_access_key%7D%22%2C%22AWS_SECRET_ACCESS_KEY%22%3A%22%24%7Binput%3Aaws_secret_key%7D%22%2C%22AWS_REGION%22%3A%22%24%7Binput%3Aaws_region%7D%22%7D%7D) [![Install with NPX in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-NPM-24bfa5?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=aws-kb-retrieval&inputs=%5B%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22aws_access_key%22%2C%22description%22%3A%22AWS%20Access%20Key%20ID%22%2C%22password%22%3Atrue%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22aws_secret_key%22%2C%22description%22%3A%22AWS%20Secret%20Access%20Key%22%2C%22password%22%3Atrue%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22aws_region%22%2C%22description%22%3A%22AWS%20Region%22%7D%5D&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40modelcontextprotocol%2Fserver-aws-kb-retrieval%22%5D%2C%22env%22%3A%7B%22AWS_ACCESS_KEY_ID%22%3A%22%24%7Binput%3Aaws_access_key%7D%22%2C%22AWS_SECRET_ACCESS_KEY%22%3A%22%24%7Binput%3Aaws_secret_key%7D%22%2C%22AWS_REGION%22%3A%22%24%7Binput%3Aaws_region%7D%22%7D%7D&quality=insiders)
-
-[![Install with Docker in VS Code](https://img.shields.io/badge/VS_Code-Docker-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=aws-kb-retrieval&inputs=%5B%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22aws_access_key%22%2C%22description%22%3A%22AWS%20Access%20Key%20ID%22%2C%22password%22%3Atrue%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22aws_secret_key%22%2C%22description%22%3A%22AWS%20Secret%20Access%20Key%22%2C%22password%22%3Atrue%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22aws_region%22%2C%22description%22%3A%22AWS%20Region%22%7D%5D&config=%7B%22command%22%3A%22docker%22%2C%22args%22%3A%5B%22run%22%2C%22-i%22%2C%22--rm%22%2C%22mcp%2Faws-kb-retrieval-server%22%5D%2C%22env%22%3A%7B%22AWS_ACCESS_KEY_ID%22%3A%22%24%7Binput%3Aaws_access_key%7D%22%2C%22AWS_SECRET_ACCESS_KEY%22%3A%22%24%7Binput%3Aaws_secret_key%7D%22%2C%22AWS_REGION%22%3A%22%24%7Binput%3Aaws_region%7D%22%7D%7D) [![Install with Docker in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-Docker-24bfa5?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=aws-kb-retrieval&inputs=%5B%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22aws_access_key%22%2C%22description%22%3A%22AWS%20Access%20Key%20ID%22%2C%22password%22%3Atrue%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22aws_secret_key%22%2C%22description%22%3A%22AWS%20Secret%20Access%20Key%22%2C%22password%22%3Atrue%7D%2C%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22aws_region%22%2C%22description%22%3A%22AWS%20Region%22%7D%5D&config=%7B%22command%22%3A%22docker%22%2C%22args%22%3A%5B%22run%22%2C%22-i%22%2C%22--rm%22%2C%22mcp%2Faws-kb-retrieval-server%22%5D%2C%22env%22%3A%7B%22AWS_ACCESS_KEY_ID%22%3A%22%24%7Binput%3Aaws_access_key%7D%22%2C%22AWS_SECRET_ACCESS_KEY%22%3A%22%24%7Binput%3Aaws_secret_key%7D%22%2C%22AWS_REGION%22%3A%22%24%7Binput%3Aaws_region%7D%22%7D%7D&quality=insiders)
-
-#### Manual Installation
-
-For manual installation, add the following JSON block to your User Settings (JSON) file in VS Code. You can do this by pressing `Ctrl + Shift + P` and typing `Preferences: Open Settings (JSON)`.
-
-Optionally, you can add it to a file called `.vscode/mcp.json` in your workspace. This will allow you to share the configuration with others.
-
-> Note that the `mcp` key is not needed in the `.vscode/mcp.json` file.
-
-```json
-{
-  "mcp": {
-    "inputs": [
-      {
-        "type": "promptString",
-        "id": "aws_access_key",
-        "description": "AWS Access Key ID",
-        "password": true
-      },
-      {
-        "type": "promptString",
-        "id": "aws_secret_key",
-        "description": "AWS Secret Access Key",
-        "password": true
-      },
-      {
-        "type": "promptString",
-        "id": "aws_region",
-        "description": "AWS Region"
-      }
-    ],
-    "servers": {
-      "aws-kb-retrieval": {
-        "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-aws-kb-retrieval"],
-        "env": {
-          "AWS_ACCESS_KEY_ID": "${input:aws_access_key}",
-          "AWS_SECRET_ACCESS_KEY": "${input:aws_secret_key}",
-          "AWS_REGION": "${input:aws_region}"
-        }
-      }
-    }
-  }
-}
-```
-
-For Docker installation:
-
-```json
-{
-  "mcp": {
-    "inputs": [
-      {
-        "type": "promptString",
-        "id": "aws_access_key",
-        "description": "AWS Access Key ID",
-        "password": true
-      },
-      {
-        "type": "promptString",
-        "id": "aws_secret_key",
-        "description": "AWS Secret Access Key",
-        "password": true
-      },
-      {
-        "type": "promptString",
-        "id": "aws_region",
-        "description": "AWS Region"
-      }
-    ],
-    "servers": {
-      "aws-kb-retrieval": {
-        "command": "docker",
-        "args": ["run", "-i", "--rm", "mcp/aws-kb-retrieval-server"],
-        "env": {
-          "AWS_ACCESS_KEY_ID": "${input:aws_access_key}",
-          "AWS_SECRET_ACCESS_KEY": "${input:aws_secret_key}",
-          "AWS_REGION": "${input:aws_region}"
-        }
-      }
-    }
-  }
-}
-```
-
-## Building
-
-Docker:
-
-```sh
+```bash
 docker build -t mcp/aws-kb-retrieval -f src/aws-kb-retrieval-server/Dockerfile .
 ```
 
+Run:
+
+```bash
+docker run -p 3000:3000 \
+  -e AWS_REGION=us-east-1 \
+  -e AWS_ACCESS_KEY_ID=... \
+  -e AWS_SECRET_ACCESS_KEY=... \
+  mcp/aws-kb-retrieval
+```
+
+## AgentCore Gateway notes
+
+- Configure the Gateway target URL to `/mcp`.
+- Gateway tool names can be prefixed (for example: `target-xyz___retrieve_from_aws_kb`).
+- The agent can auto-discover tool names, or set `AGENTCORE_GATEWAY_TOOL_NAME`.
+
 ## License
 
-This MCP server is licensed under the MIT License. This means you are free to use, modify, and distribute the software, subject to the terms and conditions of the MIT License. For more details, please see the LICENSE file in the project repository.
+MIT

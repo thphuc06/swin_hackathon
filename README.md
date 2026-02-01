@@ -1,16 +1,15 @@
 # Jars Fintech Banking Simulator + AgentCore Advisory (MVP)
 
-Minimal AWS-first MVP for a fintech advisory demo: Tier1 insights + Tier2 advisory on top of Amazon Bedrock AgentCore Runtime + Gateway + Policy + Memory + Observability.
+Minimal AWS-first fintech advisory demo built on Amazon Bedrock AgentCore Runtime + Gateway + KB RAG.
 
-## Architecture (MVP)
+## Architecture
 
-- **Frontend**: Next.js + Tailwind (minimal UI)
-- **Backend**: FastAPI BFF (REST)
+- **Frontend**: Next.js + Tailwind
+- **Backend**: FastAPI BFF (REST + SSE)
 - **Agent**: LangGraph orchestrator running on AgentCore Runtime
-- **Tier1 pipeline**: EventBridge -> (optional SQS) -> workers (Lambda/ECS)
-- **RAG**: Knowledge Bases for Amazon Bedrock (citations)
-- **Safety**: Bedrock Guardrails (input/output + PII masking + prompt attack)
-- **Auth**: Cognito User Pool JWT (AgentCore Identity recommended for inbound JWT)
+- **RAG**: Knowledge Bases for Bedrock via MCP tool (Gateway)
+- **Safety**: Bedrock Guardrails (optional)
+- **Auth**: Cognito User Pool JWT (AccessToken)
 
 ## Repo layout
 
@@ -21,9 +20,10 @@ Minimal AWS-first MVP for a fintech advisory demo: Tier1 insights + Tier2 adviso
 /workers
 /kb
 /iac
+/src/aws-kb-retrieval-server
 ```
 
-## Quick Start (Local)
+## Local quick start
 
 ### 1) Backend
 
@@ -74,7 +74,11 @@ The agent runs on port 8080 (AgentCoreApp default).
 Note: When the agent is deployed to AWS Runtime, it cannot call your local backend.
 This MVP returns **mock data** when `BACKEND_API_BASE` is localhost.
 
-## Deploy Agent to AgentCore Runtime (Starter Toolkit pattern)
+### 4) MCP server (optional local)
+
+See `src/aws-kb-retrieval-server/README.md` for local run and Docker instructions.
+
+## Deploy Agent to AgentCore Runtime (Starter Toolkit)
 
 1) Install packages
 ```bash
@@ -87,23 +91,41 @@ cd agent
 agentcore configure -e main.py
 ```
 
-3) Deploy
+3) Deploy with required runtime env
 ```bash
-agentcore deploy
+agentcore deploy --auto-update-on-conflict \
+  --env AWS_REGION=us-east-1 \
+  --env BEDROCK_MODEL_ID=amazon.nova-pro-v1:0 \
+  --env BEDROCK_KB_ID=G6GLWTUKEL \
+  --env AGENTCORE_GATEWAY_ENDPOINT=https://<gateway-id>.gateway.bedrock-agentcore.<region>.amazonaws.com/mcp \
+  --env LOG_LEVEL=info
 ```
+
+Optional (guardrails):
+```bash
+--env BEDROCK_GUARDRAIL_ID=arn:aws:bedrock:... \
+--env BEDROCK_GUARDRAIL_VERSION=DRAFT
+```
+
+If your Gateway prefixes tool names, set:
+```
+AGENTCORE_GATEWAY_TOOL_NAME=<prefixed_tool_name>
+```
+The agent also auto-resolves tool names by calling `tools/list`.
 
 4) Invoke (JWT required)
 ```bash
-# Use Cognito access token in Authorization header
+# Use Cognito AccessToken in Authorization header
 ```
 
 If `AGENTCORE_RUNTIME_ARN` is set in `backend/.env`, the backend calls AWS Runtime.
 Use **AccessToken** (token_use=access) when AgentCore is configured with `allowedClients`.
 
-## Gateway + Policy (MVP skeleton)
+## Gateway + Policy notes
 
-- Use AgentCore Gateway to expose MCP tools (SQL views, KB retrieve, audit write, code interpreter).
-- Attach Policy Engine with Cedar to enforce intent + scope constraints.
+- Configure the Gateway target URL to the MCP server `/mcp` endpoint.
+- Gateway tool names can be prefixed (for example: `target-xyz___retrieve_from_aws_kb`).
+- The agent can auto-discover the tool name, or you can set `AGENTCORE_GATEWAY_TOOL_NAME`.
 
 ## Knowledge Base (RAG)
 
@@ -114,6 +136,7 @@ Use **AccessToken** (token_use=access) when AgentCore is configured with `allowe
 
 Each module has its own `.env.example` with required variables.
 Token helper: `todo_cognito_token.md` and `agent/genToken.py` (uses env vars).
+Runtime env is **not** baked into the container; set it via `agentcore deploy --env`.
 
 ## TODO (post-hackathon scale)
 

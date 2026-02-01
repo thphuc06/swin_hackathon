@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import unicodedata
 import uuid
 from typing import Any, Dict, TypedDict
 
@@ -33,6 +34,13 @@ load_dotenv()
 FINANCIAL_INTENTS = ["summary", "house", "largest_txn", "what_if", "risk"]
 
 
+def _normalize_text(text: str) -> str:
+    stripped = "".join(
+        ch for ch in unicodedata.normalize("NFD", text) if unicodedata.category(ch) != "Mn"
+    )
+    return stripped.lower()
+
+
 def llm_generate(prompt: str) -> str:
     model_id = os.getenv("BEDROCK_MODEL_ID", "")
     region = os.getenv("AWS_REGION", "us-east-1")
@@ -55,12 +63,22 @@ def llm_generate(prompt: str) -> str:
 
 
 def intent_router(state: AgentState) -> AgentState:
-    prompt = state["prompt"].lower()
-    if "house" in prompt or "buy" in prompt:
+    normalized = _normalize_text(state["prompt"])
+    if any(
+        term in normalized
+        for term in [
+            "house",
+            "housing",
+            "mortgage",
+            "home",
+            "apartment",
+            "real estate",
+        ]
+    ):
         state["intent"] = "house"
-    elif "largest" in prompt:
+    elif any(term in normalized for term in ["largest", "max"]):
         state["intent"] = "largest_txn"
-    elif "60" in prompt:
+    elif "60" in normalized:
         state["intent"] = "summary_60d"
     else:
         state["intent"] = "summary_30d"
@@ -74,13 +92,15 @@ def fetch_context(state: AgentState) -> AgentState:
 
 
 def retrieve_kb(state: AgentState) -> AgentState:
-    state["kb"] = kb_retrieve(state["prompt"], {"doc_type": "policy"})
+    state["kb"] = kb_retrieve(state["prompt"], {"doc_type": "policy"}, state["user_token"])
     return state
 
 
 def suitability_guard(state: AgentState) -> AgentState:
-    prompt = state["prompt"].lower()
-    if any(term in prompt for term in ["invest", "buy", "sell", "stock"]):
+    if state.get("intent") == "house":
+        return state
+    normalized = _normalize_text(state["prompt"])
+    if any(term in normalized for term in ["invest", "sell", "stock"]):
         state["intent"] = "education_only"
     return state
 
@@ -105,11 +125,13 @@ def reasoning(state: AgentState) -> AgentState:
     summary = state.get("context", {})
     prompt = (
         "You are a fintech assistant. Use the numeric context only. "
-        "Do not provide investment advice. Provide concise guidance and cite KB ids.\n\n"
+        "Do not provide investment advice. Provide concise guidance.\n"
+        "Use the KB citations list as grounding, but do NOT invent KB IDs. "
+        "Do NOT include trace IDs or 'Citations:' labels in your response.\n\n"
         f"Context: {json.dumps(summary)}\n"
-        f"KB citations: {citations}\n"
+        f"KB citations (filenames): {citations}\n"
         f"User question: {state['prompt']}\n"
-        "Answer with a short paragraph, include citations and trace id."
+        "Answer with a short paragraph only."
     )
     generated = llm_generate(prompt)
     if generated:

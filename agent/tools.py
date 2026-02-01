@@ -7,7 +7,14 @@ from urllib.parse import urlparse
 
 import requests
 
-from config import BACKEND_API_BASE, BEDROCK_KB_ID
+from config import (
+    AGENTCORE_GATEWAY_ENDPOINT,
+    AGENTCORE_GATEWAY_TOOL_NAME,
+    BACKEND_API_BASE,
+    BEDROCK_KB_ID,
+)
+
+_resolved_kb_tool_name: str | None = None
 
 
 def _hash_payload(payload: Dict[str, Any]) -> str:
@@ -19,6 +26,38 @@ def _is_local_backend() -> bool:
     except ValueError:
         host = ""
     return host in {"localhost", "127.0.0.1"} or host.endswith(".local")
+
+def _auth_headers(token: str) -> Dict[str, str]:
+    if not token:
+        return {}
+    if token.lower().startswith("bearer "):
+        return {"Authorization": token}
+    return {"Authorization": f"Bearer {token}"}
+
+def _gateway_endpoint() -> str:
+    if not AGENTCORE_GATEWAY_ENDPOINT:
+        return ""
+    return (
+        AGENTCORE_GATEWAY_ENDPOINT
+        if AGENTCORE_GATEWAY_ENDPOINT.rstrip("/").endswith("/mcp")
+        else f"{AGENTCORE_GATEWAY_ENDPOINT.rstrip('/')}/mcp"
+    )
+
+
+def _gateway_jsonrpc(payload: Dict[str, Any], user_token: str) -> Dict[str, Any]:
+    endpoint = _gateway_endpoint()
+    if not endpoint:
+        raise RuntimeError("AGENTCORE_GATEWAY_ENDPOINT not configured")
+    if not AGENTCORE_GATEWAY_ENDPOINT:
+        raise RuntimeError("AGENTCORE_GATEWAY_ENDPOINT not configured")
+    response = requests.post(
+        endpoint,
+        json=payload,
+        headers=_auth_headers(user_token),
+        timeout=20,
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 def _mock_summary(range_days: str) -> Dict[str, Any]:
@@ -39,7 +78,7 @@ def _mock_summary(range_days: str) -> Dict[str, Any]:
 def sql_read_views(user_token: str, range_days: str) -> Dict[str, Any]:
     if _is_local_backend():
         return _mock_summary(range_days)
-    headers = {"Authorization": user_token} if user_token else {}
+    headers = _auth_headers(user_token)
     try:
         response = requests.get(
             f"{BACKEND_API_BASE}/aggregates/summary",
@@ -56,7 +95,7 @@ def sql_read_views(user_token: str, range_days: str) -> Dict[str, Any]:
 def goals_get_set(user_token: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     if _is_local_backend():
         return {"status": "mocked", "payload": payload}
-    headers = {"Authorization": user_token} if user_token else {}
+    headers = _auth_headers(user_token)
     response = requests.post(
         f"{BACKEND_API_BASE}/goals",
         json=payload,
@@ -70,7 +109,7 @@ def goals_get_set(user_token: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 def notifications_send(user_token: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     if _is_local_backend():
         return {"status": "mocked", "payload": payload}
-    headers = {"Authorization": user_token} if user_token else {}
+    headers = _auth_headers(user_token)
     response = requests.post(
         f"{BACKEND_API_BASE}/notifications",
         json=payload,
@@ -81,17 +120,80 @@ def notifications_send(user_token: str, payload: Dict[str, Any]) -> Dict[str, An
     return response.json()
 
 
-def kb_retrieve(query: str, filters: Dict[str, str]) -> Dict[str, Any]:
+def _parse_kb_content(content: Any) -> Dict[str, Any]:
+    context_text = ""
+    sources: list[Dict[str, Any]] = []
+    if not isinstance(content, list):
+        return {"context": context_text, "matches": sources}
+    for item in content:
+        text = item.get("text", "") if isinstance(item, dict) else ""
+        if text.startswith("Context:"):
+            context_text = text.replace("Context:", "", 1).strip()
+        if text.startswith("RAG Sources:"):
+            raw = text.replace("RAG Sources:", "", 1).strip()
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    sources = parsed
+            except json.JSONDecodeError:
+                pass
+    matches = []
+    for src in sources:
+        matches.append(
+            {
+                "id": src.get("id", ""),
+                "text": src.get("snippet", ""),
+                "citation": src.get("fileName") or src.get("id") or "KB",
+                "score": src.get("score", 0),
+            }
+        )
+    return {"context": context_text, "matches": matches}
+
+def _resolve_kb_tool_name(user_token: str) -> str:
+    global _resolved_kb_tool_name
+    if AGENTCORE_GATEWAY_TOOL_NAME:
+        return AGENTCORE_GATEWAY_TOOL_NAME
+    if _resolved_kb_tool_name:
+        return _resolved_kb_tool_name
+    try:
+        data = _gateway_jsonrpc(
+            {"jsonrpc": "2.0", "id": "tools-1", "method": "tools/list"},
+            user_token,
+        )
+        tools = (data.get("result") or {}).get("tools", [])
+        for tool in tools:
+            name = tool.get("name", "")
+            if name == "retrieve_from_aws_kb" or name.endswith("___retrieve_from_aws_kb"):
+                _resolved_kb_tool_name = name
+                return name
+    except requests.RequestException:
+        pass
+    return "retrieve_from_aws_kb"
+
+
+def kb_retrieve(query: str, filters: Dict[str, str], user_token: str = "") -> Dict[str, Any]:
     if not BEDROCK_KB_ID:
         return {"matches": [], "note": "KB not configured"}
-    # Placeholder for Knowledge Bases retrieve. Replace with bedrock-agent runtime call.
-    return {
-        "matches": [
-            {"id": "kb-03", "text": "Risk suitability guidance", "citation": "KB-03"},
-            {"id": "kb-07", "text": "Housing affordability template", "citation": "KB-07"},
-        ],
-        "filters": filters,
+    if not AGENTCORE_GATEWAY_ENDPOINT:
+        return {"matches": [], "note": "Gateway not configured"}
+    tool_name = _resolve_kb_tool_name(user_token)
+    payload = {
+        "jsonrpc": "2.0",
+        "id": "kb-1",
+        "method": "tools/call",
+        "params": {
+            "name": tool_name,
+            "arguments": {"query": query, "knowledgeBaseId": BEDROCK_KB_ID, "n": 3},
+        },
     }
+    try:
+        data = _gateway_jsonrpc(payload, user_token)
+        content = (data.get("result") or {}).get("content", [])
+        parsed = _parse_kb_content(content)
+        parsed["filters"] = filters
+        return parsed
+    except requests.RequestException as exc:
+        return {"matches": [], "note": f"Gateway call failed: {exc}"}
 
 
 def code_interpreter_run(expression: str) -> Dict[str, Any]:
