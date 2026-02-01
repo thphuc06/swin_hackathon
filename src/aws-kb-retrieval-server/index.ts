@@ -174,15 +174,20 @@ const httpServer = createServer(async (req, res) => {
 
     const url = new URL(req.url, `http://${req.headers.host}`);
 
-    if (req.method === "GET" && url.pathname === "/sse") {
-      const transport = new SSEServerTransport("/message", res);
+    const ssePaths = new Set(["/sse", "/mcp", "/mcp/sse"]);
+    const messagePaths = new Set(["/message", "/mcp/message"]);
+
+    if (req.method === "GET" && ssePaths.has(url.pathname)) {
+      const messagePath =
+        url.pathname.startsWith("/mcp") ? "/mcp/message" : "/message";
+      const transport = new SSEServerTransport(messagePath, res);
       transports.set(transport.sessionId, transport);
       transport.onclose = () => transports.delete(transport.sessionId);
       await server.connect(transport);
       return;
     }
 
-    if (req.method === "POST" && url.pathname === "/message") {
+    if (req.method === "POST" && messagePaths.has(url.pathname)) {
       const sessionId = url.searchParams.get("sessionId");
       if (!sessionId || !transports.has(sessionId)) {
         res.writeHead(400).end("Invalid or missing sessionId");
