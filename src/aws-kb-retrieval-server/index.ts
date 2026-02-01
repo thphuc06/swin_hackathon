@@ -146,6 +146,22 @@ async function handleJsonRpc(req: import("node:http").IncomingMessage, res: impo
     }
 
     const id = payload.id ?? null;
+    if (payload.method === "initialize") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          result: {
+            protocolVersion: "2025-06-18",
+            capabilities: { tools: { listChanged: false } },
+            serverInfo: { name: "aws-kb-retrieval-server", version: "0.2.0" },
+          },
+        }),
+      );
+      return;
+    }
+
     if (payload.method === "tools/list") {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ jsonrpc: "2.0", id, result: { tools: [RETRIEVAL_TOOL] } }));
@@ -269,8 +285,14 @@ const httpServer = createServer(async (req, res) => {
       return;
     }
 
-    if (req.method === "POST" && url.pathname === "/mcp") {
+    if (req.method === "POST" && (url.pathname === "/mcp" || url.pathname === "/mcp/")) {
       await handleJsonRpc(req, res);
+      return;
+    }
+
+    if (req.method === "GET" && (url.pathname === "/mcp" || url.pathname === "/mcp/")) {
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("MCP endpoint ready. Use POST /mcp for JSON-RPC.");
       return;
     }
 
