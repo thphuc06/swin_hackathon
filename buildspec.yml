@@ -1,0 +1,16 @@
+version: 0.2
+phases:
+  pre_build:
+    commands:
+      - aws --version
+      - $(aws ecr get-login --no-include-email --region us-east-1)
+  build:
+    commands:
+      - docker build -t mcp/aws-kb-retrieval -f src/aws-kb-retrieval-server/Dockerfile .
+      - docker tag mcp/aws-kb-retrieval:latest $ECR_URI:latest
+  post_build:
+    commands:
+      - docker push $ECR_URI:latest
+env:
+  variables:
+    ECR_URI: "<account>.dkr.ecr.us-east-1.amazonaws.com/mcp/aws-kb-retrieval"
