@@ -1,16 +1,19 @@
 version: 0.2
+env:
+  variables:
+    AWS_REGION: us-east-1
+    ECR_REGISTRY: 021862553142.dkr.ecr.us-east-1.amazonaws.com
+    ECR_REPO: mcp/aws-kb-retrieval
+    ECR_URI: 021862553142.dkr.ecr.us-east-1.amazonaws.com/mcp/aws-kb-retrieval
 phases:
   pre_build:
     commands:
       - aws --version
-      - $(aws ecr get-login --no-include-email --region us-east-1)
+      - echo "Logging in to ECR..."
+      - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
   build:
     commands:
-      - docker build -t mcp/aws-kb-retrieval -f src/aws-kb-retrieval-server/Dockerfile .
-      - docker tag mcp/aws-kb-retrieval:latest $ECR_URI:latest
+      - docker build -t $ECR_URI:latest -f src/aws-kb-retrieval-server/Dockerfile .
   post_build:
     commands:
       - docker push $ECR_URI:latest
-env:
-  variables:
-    ECR_URI: "<account>.dkr.ecr.us-east-1.amazonaws.com/mcp/aws-kb-retrieval"
