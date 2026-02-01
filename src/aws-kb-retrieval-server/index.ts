@@ -125,6 +125,77 @@ const server = new Server(
   },
 );
 
+async function readJsonBody(req: import("node:http").IncomingMessage): Promise<any> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const raw = Buffer.concat(chunks).toString("utf8");
+  if (!raw) {
+    return null;
+  }
+  return JSON.parse(raw);
+}
+
+async function handleJsonRpc(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) {
+  try {
+    const payload = await readJsonBody(req);
+    if (!payload || payload.jsonrpc !== "2.0" || !payload.method) {
+      res.writeHead(400).end("Invalid JSON-RPC payload");
+      return;
+    }
+
+    const id = payload.id ?? null;
+    if (payload.method === "tools/list") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ jsonrpc: "2.0", id, result: { tools: [RETRIEVAL_TOOL] } }));
+      return;
+    }
+
+    if (payload.method === "tools/call") {
+      const params = payload.params || {};
+      const name = params.name;
+      const args = params.arguments || {};
+      if (name !== "retrieve_from_aws_kb") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id,
+            error: { code: -32601, message: `Unknown tool: ${name}` },
+          }),
+        );
+        return;
+      }
+
+      const { query, knowledgeBaseId, n = 3 } = args as Record<string, any>;
+      const result = await retrieveContext(query, knowledgeBaseId, n);
+      const content = result.isRagWorking
+        ? [
+            { type: "text", text: `Context: ${result.context}` },
+            { type: "text", text: `RAG Sources: ${JSON.stringify(result.ragSources)}` },
+          ]
+        : [{ type: "text", text: "Retrieval failed or returned no results." }];
+
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ jsonrpc: "2.0", id, result: { content } }));
+      return;
+    }
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        error: { code: -32601, message: `Method not found: ${payload.method}` },
+      }),
+    );
+  } catch (error) {
+    console.error("JSON-RPC error:", error);
+    res.writeHead(500).end("Internal server error");
+  }
+}
+
 // Request handlers
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [RETRIEVAL_TOOL],
@@ -195,6 +266,11 @@ const httpServer = createServer(async (req, res) => {
       }
       const transport = transports.get(sessionId)!;
       await transport.handlePostMessage(req, res);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/mcp") {
+      await handleJsonRpc(req, res);
       return;
     }
 
