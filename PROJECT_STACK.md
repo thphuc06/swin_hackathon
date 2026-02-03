@@ -49,9 +49,12 @@ API endpoints (BFF)
 | Method | Path | Purpose | Notes |
 | --- | --- | --- | --- |
 | POST | /transactions/transfer | Create transfer (jar + category required) | emit TransactionCreated |
+| POST | /transactions/suggest | Suggest jar + category | Top-K + confidence for UI prefill |
 | GET | /transactions | list txns (30/60d) | read-only |
 | GET | /aggregates/summary | 30/60d summary | SQL view |
 | GET | /notifications | inbox list | Tier1 outputs |
+| GET | /jars | list jars | user-defined jars (name/description/keywords) |
+| POST | /jars | create jar | improves categorization + personalization |
 | POST | /goals | create/update goal | house goal |
 | GET | /risk-profile | current profile | versioned |
 | POST | /risk-profile | new version | immutable |
@@ -59,10 +62,13 @@ API endpoints (BFF)
 | GET | /audit/:trace_id | audit record | demo transparency |
 
 Tool catalog (agent tools)
+Training & data plan: see `model_data_train.md`.
+
 | Tool | Source | Maps to | Purpose |
 | --- | --- | --- | --- |
 | sql_read_views | BFF/SQL | GET /aggregates/summary | numeric context |
 | transactions_list | BFF/SQL | GET /transactions | largest txn, splits |
+| categorize_tx | ML service | POST /transactions/suggest | suggest jar + subcategory (Top-K + confidence) |
 | goals_get_set | BFF | POST /goals | goals update |
 | risk_profile_get | BFF | GET /risk-profile | suitability |
 | kb_retrieve | MCP KB server -> Bedrock KB | KB retrieve | citations + governance |
@@ -72,9 +78,9 @@ Tool catalog (agent tools)
 DB schema (list, key fields)
 - users (id, email, created_at)
 - profiles (user_id, full_name, locale, risk_level)
-- jars (id, user_id, name, target_amount)
+- jars (id, user_id, name, description, keywords_json, target_amount)
 - categories (id, parent_id, name, type)
-- transactions (id, user_id, jar_id, category_id, amount, counterparty, ts)
+- transactions (id, user_id, jar_id, category_id, amount, currency, counterparty, raw_narrative, user_note, channel, ts)
 - txn_agg_daily (user_id, date, spend, income, jar_spend_json)
 - goals (id, user_id, type, target_amount, horizon_months, status)
 - risk_profile_versions (id, user_id, risk_score, created_at)
@@ -292,6 +298,7 @@ flowchart LR
 sequenceDiagram
   participant User
   participant API as Backend API
+  participant CAT as Tx Categorizer
   participant EB as EventBridge
   participant Q as SQS
   participant Agg as Aggregation Worker
@@ -303,6 +310,11 @@ sequenceDiagram
   participant N as Notification(SNS/Pinpoint)
   participant Audit as Audit Logs
 
+  User->>API: Initiate transfer (counterparty/amount/note?)
+  opt Autocomplete jar/category (optional)
+    API->>CAT: Predict Top-K (jar_id, category_id)
+    CAT-->>API: suggestions + confidence
+  end
   User->>API: Confirm Jar + Subcategory + Pay
   API->>EB: Publish TransactionCreated
   EB->>Q: Buffer event
@@ -373,6 +385,7 @@ flowchart TD
   P -->|ALLOW| T1["Tool: SQL Read Views (least privilege)"]
   P -->|ALLOW| T2["Tool: Code Interpreter (what-if)"]
   P -->|ALLOW| T3["Tool: Notification Sender (SNS/Pinpoint)"]
+  P -->|ALLOW| T4["Tool: Tx Categorizer (Jar + Category)"]
 
   P -->|DENY| D["Block + safe response<br/>(educate / escalate Tier2)"]
 
@@ -380,6 +393,7 @@ flowchart TD
   T1 --> L
   T2 --> L
   T3 --> L
+  T4 --> L
   D --> L
   L --> CW["CloudWatch + Audit Logs"]
 ```
