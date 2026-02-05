@@ -17,12 +17,22 @@ This is a design-only schema. No migrations are generated in this MVP. Tables ar
 ## jars
 - id (uuid, pk)
 - user_id (uuid, fk)
+- template_id (uuid, fk -> jar_templates.id, nullable)
 - name (text)
 - description (text, nullable)
 - keywords (jsonb, nullable) -- array of strings
 - target_amount (numeric)
 - created_at (timestamptz)
 - updated_at (timestamptz)
+
+## jar_templates
+Default jars for first-time users.
+- id (uuid, pk)
+- name (text)
+- description (text, nullable)
+- keywords (jsonb, nullable)
+- is_default (bool)
+- created_at (timestamptz)
 
 ## categories (hierarchical)
 - id (uuid, pk)

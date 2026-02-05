@@ -63,6 +63,8 @@ API endpoints (BFF)
 | GET | /notifications | inbox list | Tier1 outputs |
 | GET | /jars | list jars | user-defined jars (name/description/keywords) |
 | POST | /jars | create jar | improves categorization + personalization |
+| GET | /jars/templates | list default jar templates | seed on first use |
+| POST | /jars/seed-defaults | create default jars for user | one-time init |
 | GET | /signals/summary | data-quality + behavior signals | % categorized, missing data, discipline score |
 | GET | /forecast/cashflow | cashflow forecast | include 90d runway + confidence |
 | POST | /rules/counterparty | map counterparty -> jar/category | "1-click fix" action from insights |
@@ -95,7 +97,8 @@ Training & data plan: see `model_data_train.md`.
 DB schema (list, key fields)
 - users (id, email, created_at)
 - profiles (user_id, full_name, locale, risk_level)
-- jars (id, user_id, name, description, keywords_json, target_amount)
+- jar_templates (id, name, description, keywords_json, is_default, created_at)
+- jars (id, user_id, template_id, name, description, keywords_json, target_amount)
 - categories (id, parent_id, name, type)
 - transactions (id, user_id, jar_id, category_id, amount, currency, counterparty, raw_narrative, user_note, channel, ts)
 - rules_counterparty_map (id, user_id, counterparty_norm, jar_id, category_id, created_at)
@@ -420,6 +423,15 @@ sequenceDiagram
   participant N as Inbox/Notifications
   participant RT as AgentCore Runtime (Tier2)
 
+  opt First-time user (no jars)
+    UI->>API: GET /jars
+    API-->>UI: empty
+    UI->>API: GET /jars/templates
+    API-->>UI: default templates
+    UI->>API: POST /jars/seed-defaults
+    API->>PG: create default jars
+  end
+
   U->>UI: Create transfer
   opt Autocomplete jar/category (optional)
     UI->>API: POST /transactions/suggest (draft txn)
@@ -430,6 +442,11 @@ sequenceDiagram
     CAT-->>GW: suggestions + confidence
     GW-->>API: suggestions
     API-->>UI: prefill + confidence
+    alt Low confidence / no match
+      UI->>API: POST /jars (create new jar)
+      API->>PG: insert jar row
+      UI-->>U: select new jar
+    end
   end
 
   U->>UI: Confirm jar + category

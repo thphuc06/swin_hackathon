@@ -47,6 +47,12 @@ Create a jar (improves personalization + categorization).
 }
 ```
 
+## GET /jars/templates
+List default jar templates for first-time users.
+
+## POST /jars/seed-defaults
+Create default jars for a user (one-time init).
+
 ## GET /signals/summary
 Returns data quality + behavior signals for UI and Tier2 (example: % categorized, discipline score).
 
