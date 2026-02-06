@@ -10,10 +10,10 @@ This document plans how to add trainable models to **Jars** while keeping the ru
 
 ### Core (MVP)
 
-1) **`tx_categorizer` (Jar + Category suggester)**
-   - **Job:** suggest `jar_id` + `category_id` (Top-K + confidence) for a transaction.
-   - **Why it's needed:** users often leave transfer notes empty; UX still wants "1-click confirm" instead of manual browsing.
-   - **Key requirement:** works even when users can create **new, custom jars** (dynamic label set).
+1) **`llm_categorize_tx` (LLM inline Jar/Category suggester)**
+   - **Job:** use LLM + rules to suggest `jar_id` + `category_id` (Top-K + confidence) for a transaction; auto-select only if high confidence.
+   - **Why it's needed:** reduce friction in transfer flow; keep UX "tap to confirm" while preserving correctness.
+   - **Key requirement:** works with **user-defined jars** (dynamic labels) via Jar Profile text; no model training required for MVP.
 
 2) **`anomaly_signal` (Tier1 alerts)**
    - **Job:** detect spend spikes, income drops, runway risk, abnormal category drift.
@@ -27,14 +27,15 @@ This document plans how to add trainable models to **Jars** while keeping the ru
 4) **`merchant_normalizer`**
    - **Job:** normalize noisy `counterparty/raw_narrative` into a canonical `merchant_id` (clustering / embeddings).
 
-## 2) `tx_categorizer`: design that supports user-defined jars
+**Advisor model note (Tier2):** No fine-tune planned for MVP. Tier2 uses LLM + SQL views + rules; KB only for policy/templates with citations.
 
-Because jars are **user-defined**, classic multi-class classification ("choose one of N fixed labels") breaks whenever a user creates a new jar.
-The robust approach is **matching/ranking**:
+## 2) `llm_categorize_tx`: LLM-first design for user-defined jars
 
-- Represent each user jar by a **Jar Profile** text blob.
-- Score each jar against the transaction text and metadata.
-- Return Top-K jar/category suggestions with calibrated confidence.
+Because jars are **user-defined**, a fixed-head classifier is brittle. MVP uses **LLM + rules + Jar Profile text** to generate Top-K suggestions with confidence gating:
+
+- Represent each user jar by a **Jar Profile** text blob (name/description/keywords/examples).
+- Prompt LLM with transaction text/metadata + candidate jar profiles to produce scored Top-K.
+- Apply deterministic rules (pinned mappings) before LLM; low confidence -> force manual selection.
 
 ### 2.1 Inputs (minimum viable)
 
@@ -67,24 +68,28 @@ Keywords: {kw1, kw2, ...}
 Examples: {merchant1, merchant2, ...}
 ```
 
-### 2.3 Scoring + confidence gating
+### 2.3 Scoring + confidence gating (LLM-first)
 
-MVP scoring stack (fast -> accurate):
+MVP scoring stack:
 
 1) **Rules first (deterministic)**
-   - `counterparty -> jar_id` pinned mappings (user confirms once, reuse forever)
+   - `counterparty -> jar_id/category_id` pinned mappings (user confirms once, reuse forever)
    - keyword rules (regex/contains)
 
-2) **Embedding retrieval (candidate generation)**
-   - Embed `transaction_text` and `jar_profile_text`.
-   - Top-N by cosine similarity.
+2) **LLM scoring**
+   - Prompt: transaction fields + Jar Profiles; ask for Top-K with normalized confidence.
+   - Apply safe output format (JSON top_k).
 
-3) **Cross-encoder rerank (optional, later)**
-   - A small transformer that scores `(transaction_text, jar_profile_text) -> relevance`.
+3) **Optional candidate pruning (later)**
+   - Use embeddings to preselect Top-N jar profiles before LLM to save cost/latency.
 
-Confidence gating for UX:
-- Autoselect only when `p_top1 >= T` **and** `(p_top1 - p_top2) >= M`
-- Else show Top-K suggestions and require tap-to-confirm
+Confidence gating defaults (hackathon):
+- Autoselect only when `p_top1 >= 0.75` **and** `(p_top1 - p_top2) >= 0.20`.
+- Otherwise show Top-K and require user confirmation.
+
+Flow notes:
+- **Tier1 transfer UX:** user picks jar manually; `llm_categorize_tx` only hints Top-K to speed selection.
+- **Tier2 external/recurring feeds:** LLM auto-categorizes to **categories (not jars)**; surface to user to attach jar later.
 
 ## 3) Data to collect (datasets you can actually train)
 
@@ -93,7 +98,7 @@ Public datasets help with generic "category from description", but will not matc
 - your jar taxonomy (dynamic, user-defined)
 - your product UX (confirm/correct loop)
 
-So the most valuable dataset is **your own app telemetry** (with user consent).
+So the most valuable dataset is **your own app telemetry** (with user consent). For LLM-first MVP, public datasets are **optional bootstrap** for prompt design/edge cases, not required.
 
 ### 3.1 Tables / events (recommended)
 
@@ -125,34 +130,22 @@ Every time a user confirms/changes a suggestion, write one event:
 
 This trains a model that can score **new jars** without changing the classifier head.
 
-## 4) Training recipes (practical MVP -> better)
+## 4) Categorization recipes (LLM-first, training optional later)
 
-### 4.1 MVP baseline (no GPU required)
-- Deterministic rules + pinned mappings
-- Embedding model (off-the-shelf, no fine-tune) for candidate retrieval
-- Calibrate thresholds on your own validation logs (`tx_label_events`)
+### 4.1 MVP (no training)
+- Deterministic rules + pinned mappings.
+- LLM prompt with Jar Profiles to return Top-K + confidence.
+- Calibrate thresholds T/M on validation logs (`tx_label_events`), not by training.
 
-### 4.2 Fine-tune option (recommended when you have data)
+### 4.2 Optional future fine-tune (if data arrives)
+- Keep LLM prompt as orchestrator; optionally fine-tune embeddings for candidate pruning.
+- If pursuing training: bi-encoder or cross-encoder as in previous plan, but **not required for hackathon**.
 
-**Option A: Bi-encoder (embedding fine-tune)**
-- Loss: contrastive / triplet
-- Pros: fast inference + supports ANN index
-- Cons: may need reranker for top-1 accuracy
-
-**Option B: Cross-encoder (pair classifier)**
-- Loss: binary classification on (txn_text, jar_text)
-- Pros: higher accuracy on top-1
-- Cons: slower; use only on Top-N candidates
-
-### 4.3 Evaluation metrics (what matters for UX)
+### 4.3 Evaluation metrics (UX-first)
 - `top1_accuracy`, `top3_accuracy`
-- `coverage@confidence`: % autoselected at threshold T
+- `coverage@confidence`: % autoselected at thresholds T/M
 - `override_rate`: % user changes model suggestion
-- calibration (ECE), especially if you auto-apply suggestions
-
-Split strategy:
-- time-based split per user (train on older txns, validate on newer)
-- also test cold-start jars (new jars with 0-3 examples)
+- Calibration (ECE) only if auto-select is enabled
 
 ## 5) Integration into the project (tool-first, auditable)
 
@@ -163,7 +156,7 @@ sequenceDiagram
   participant U as User
   participant UI as Frontend
   participant API as Backend BFF
-  participant CAT as tx_categorizer (tool)
+  participant CAT as llm_categorize_tx (tool)
   participant DB as Postgres (truth)
 
   U->>UI: Enter transfer (counterparty/amount/note optional)
@@ -179,9 +172,9 @@ sequenceDiagram
 
 ### 5.2 Service placement
 
-Treat `tx_categorizer` as a deployable tool:
-- FastAPI/Node service (ECS/App Runner) **or** SageMaker endpoint.
-- Version the model (`model_version`) and log it on every prediction.
+Treat `llm_categorize_tx` as a deployable tool:
+- LLM tool exposed via Gateway/BFF; no model training required for MVP.
+- Version prompt/policy as `model_version` and log it on every prediction.
 
 ### 5.3 Governance & audit
 - Do not send raw ledger rows to the Tier2 LLM.
@@ -196,8 +189,8 @@ Treat `tx_categorizer` as a deployable tool:
 1) Add `POST /transactions/suggest` returning Top-K jar/category + confidence.
 2) Add jar fields: `description`, `keywords` in schema (design-level is enough for MVP).
 3) Start logging `tx_label_events` for every confirmation/override.
-4) Start with rule-based + embedding similarity (no training).
-5) After ~1-2 weeks of data, fine-tune bi-encoder or cross-encoder.
+4) Start with rules + `llm_categorize_tx` prompt (no training) with thresholds T=0.75, M=0.20.
+5) Optional later: add embedding pruning or fine-tune if/when data volume justifies.
 
 ## 7) Forecast + Anomaly addendum (user total + per jar)
 
@@ -207,7 +200,7 @@ This section extends the plan for **forecasting** and **anomaly** beyond the rul
 Public datasets help with text signals or anomaly patterns, but do **not** replace real user telemetry.
 Use them to prototype pipelines, metrics, and thresholds.
 
-**A) Text -> Category (tx_categorizer bootstrap)**
+**A) Text -> Category (llm_categorize_tx bootstrap, optional)**
 - **HF: `mitulshah/transaction-categorization`**
   - Large dataset with `transaction_description` + `category`.
   - Good for baseline text classifier / embedding retrieval.

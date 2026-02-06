@@ -1,14 +1,14 @@
 Jars Fintech Banking Simulator + AgentCore Advisory
 
 System restatement (5-7 bullets)
-- Web banking simulator (login, transfer requires Jar + Subcategory) + Tier1 inbox.
-- Tier2 streaming chat on AgentCore Runtime + LangGraph with citations, disclaimer, trace_id.
+- Web banking simulator: Tier1 = user-driven Jar pick in UI (fast transfer UX) with optional LLM Top-K hint; Tier1 insights land in inbox.
+- Tier2 = deep advisory chat on AgentCore Runtime + LangGraph with citations, disclaimer, trace_id.
+- External/recurring transactions are processed in a separate detect-and-attach flow (`llm_categorize_tx`), not by Tier2 chat.
 - System of record in Postgres (Supabase MVP) -> Aurora PG; numbers must come from SQL.
 - KB used only for policy/templates/services, with citations from Bedrock Knowledge Bases.
 - Tool plane via AgentCore Gateway (MCP) + Policy/Cedar for deterministic access control.
 - Guardrails for PII/prompt attacks + audit trail (trace_id, tool calls, decisions).
 - Runtime cannot call localhost; tool endpoints must be public or behind Gateway.
-- Hackathon goal: demonstrate **proactive** advisories from **recent transaction behavior** (runway/90d risk), not just chat.
 
 Layer choices (refactor)
 | Layer | Choice | Why it fits fintech | Responsibility |
@@ -57,7 +57,7 @@ API endpoints (BFF)
 | Method | Path | Purpose | Notes |
 | --- | --- | --- | --- |
 | POST | /transactions/transfer | Create transfer (jar + category required) | emit TransactionCreated |
-| POST | /transactions/suggest | Suggest jar + category | Top-K + confidence for UI prefill |
+| POST | /transactions/suggest | Suggest jar + category | LLM tool (`llm_categorize_tx`) with confidence gating; auto-select only if high confidence |
 | GET | /transactions | list txns (30/60d) | read-only |
 | GET | /aggregates/summary | 30/60d summary | SQL view |
 | GET | /notifications | inbox list | Tier1 outputs |
@@ -83,7 +83,7 @@ Training & data plan: see `model_data_train.md`.
 | --- | --- | --- | --- |
 | sql_read_views | BFF/SQL | GET /aggregates/summary | numeric context |
 | transactions_list | BFF/SQL | GET /transactions | largest txn, splits |
-| categorize_tx | ML service | POST /transactions/suggest | suggest jar + subcategory (Top-K + confidence) |
+| llm_categorize_tx | LLM tool | POST /transactions/suggest | suggest jar + subcategory (Top-K + confidence, no training) |
 | signals_read | BFF/SQL | GET /signals/summary | data quality + behavior signals |
 | cashflow_forecast_90d | BFF/SQL | GET /forecast/cashflow | runway + 90d cashflow risk |
 | rules_counterparty_set | BFF | POST /rules/counterparty | persist mapping for messy data |
@@ -132,6 +132,7 @@ Tier1 pipeline spec
 - Worker B: signals/forecast compute (runway/90d risk, discipline, missing data)
 - Worker C: triggers (rules/thresholds/anomaly) + format insight template + add disclaimer + write notification + audit
 - UI inbox: list notifications sorted by created_at
+- User-facing UX: transfer flow is **manual jar pick**; optional `llm_categorize_tx` gives Top-K hint; low confidence -> user must choose.
 
 B) Agent behavior spec
 
@@ -139,6 +140,7 @@ Tier1 (insight generator)
 - Template-first; only use KB for approved phrasing/disclaimers.
 - No investment advice; include standard disclaimer.
 - Prefer actionable outputs (CTA) when possible (set rule / recategorize / set budget).
+- Low-confidence categorization must not auto-apply; require user confirmation.
 
 Tier2 (LangGraph routing)
 - Router: stats vs goal vs what-if vs risk/suitability.
@@ -215,14 +217,15 @@ flowchart TB
   IN["Input arrives"] --> SRC{"What triggered it?"}
 
   %% Tier1: proactive
-  SRC -->|New transaction event| T1["Tier1 (Proactive)<br/>Event-driven pipeline"]
+  SRC -->|User transfer (UI)| T1["Tier1 (Proactive)<br/>Event-driven pipeline<br/>Jar picked manually; LLM hint optional"]
   T1 --> T1A["Read truth from SQL/views<br/>+ compute signals/forecast (90d)"]
   T1A --> T1B{"Any rule/threshold/anomaly triggered?"}
   T1B -->|Yes| N1["Output: Notification/Inbox insight<br/>+ CTA (fix mapping / set budget)"]
   T1B -->|No| N0["Output: No notification<br/>(still updates signals/views)"]
 
   %% Tier2: reactive
-  SRC -->|User prompt / Why?| T2["Tier2 (Advisor)<br/>AgentCore Runtime"]
+  SRC -->|User prompt / Why?| T2["Tier2 (Deep Advisor)<br/>AgentCore Runtime (Bedrock LLM)"]
+
   T2 --> R0["Intent router (cheap)<br/>choose minimal tools"]
   R0 --> R1["Read-only tools first:<br/>signals_read -> cashflow_forecast_90d -> sql_read_views<br/>(+ transactions_list if needed)"]
   R1 --> R2["KB (optional): policy/template phrasing<br/>with citations"]
@@ -245,8 +248,8 @@ flowchart TB
   end
 
   subgraph API
-    APIGW[API Gateway]
-    BFF["Backend BFF (Lambda/ECS)<br/>CRUD + Chat Proxy + AuthZ"]
+    APIGW[API Gateway (AWS)]
+    BFF["Backend BFF (Lambda/ECS/App Runner)<br/>CRUD + Chat Proxy + AuthZ"]
   end
 
   subgraph DataRecord["System of Record (SQL)"]
@@ -256,10 +259,10 @@ flowchart TB
   end
 
   subgraph Tier1["Tier1 Push Pipeline (Event-driven)"]
-    EB[EventBridge]
+    EB[EventBridge (AWS)]
     Q["SQS (buffer)"]
-    W1["Aggregation Worker<br/>update aggregates"]
-    W2["Trigger/Template Worker<br/>rules -> insight draft"]
+    W1["Aggregation Worker (Lambda/ECS)<br/>update aggregates"]
+    W2["Trigger/Template Worker (Lambda/ECS)<br/>rules -> insight draft"]
     NTFY["SNS/Pinpoint<br/>Notifications"]
   end
 
@@ -276,9 +279,10 @@ flowchart TB
   end
 
   subgraph RAG["Managed RAG"]
-    S3DOC["S3 Docs<br/>Policies/Services/Templates<br/>+ metadata tags"]
+    S3DOC["S3 Docs (AWS)<br/>Policies/Services/Templates<br/>+ metadata tags"]
     KB["Knowledge Bases for Amazon Bedrock<br/>Ingest + Retrieve (+citations)"]
-    VEC["Vector Store (managed)<br/>OpenSearch Serverless (rec) / Aurora pgvector"]
+    VEC["Vector Store (managed)<br/>OpenSearch Serverless (AWS) / Aurora pgvector"]
+    LLM["Bedrock LLM<br/>(for detect/attach flow + Tier2 narrative)"]
   end
 
   subgraph Obs["Observability"]
@@ -303,10 +307,12 @@ flowchart TB
   POL -->|allow| PG
   POL -->|allow| CI
   POL -->|allow| KB
+  POL -->|allow| LLM
 
   %% RAG
   S3DOC --> KB --> VEC
   RT -->|Retrieve / RAG| KB
+  RT -->|LLM (Bedrock)| LLM
 
   %% Observability
   RT --> CW
@@ -433,20 +439,13 @@ sequenceDiagram
   end
 
   U->>UI: Create transfer
-  opt Autocomplete jar/category (optional)
+  opt Optional LLM hint (Top-K)
     UI->>API: POST /transactions/suggest (draft txn)
-    API->>GW: tools/call categorize_tx
+    API->>GW: tools/call llm_categorize_tx
     GW->>POL: evaluate (read-only tool)
     POL-->>GW: ALLOW
-    GW->>CAT: predict Top-K
-    CAT-->>GW: suggestions + confidence
-    GW-->>API: suggestions
-    API-->>UI: prefill + confidence
-    alt Low confidence / no match
-      UI->>API: POST /jars (create new jar)
-      API->>PG: insert jar row
-      UI-->>U: select new jar
-    end
+    GW-->>API: suggestions + confidence
+    API-->>UI: prefill if high confidence else show Top-K
   end
 
   U->>UI: Confirm jar + category
@@ -567,7 +566,6 @@ Decision matrix (recommended MVP)
 | --- | --- | --- | --- |
 | "Am I at risk in next 3 months?" | `signals_read` -> `cashflow_forecast_90d` -> `sql_read_views` | `kb_retrieve` | none |
 | "Why was I flagged abnormal spend?" | `signals_read` -> `sql_read_views` -> `transactions_list` | `kb_retrieve` | `rules_counterparty_set` (only if user fixes mapping) |
-| "Categorize this transaction" | `categorize_tx` | `kb_retrieve` (wording) | `rules_counterparty_set` (user confirms) |
 | "Set a threshold rule" | `signals_read` | `sql_read_views` | `budgets_get_set` (user confirms) |
 
 6) Tool governance layer (Gateway + Policy/Cedar + Audit)
