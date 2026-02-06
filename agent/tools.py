@@ -12,6 +12,7 @@ from config import (
     AGENTCORE_GATEWAY_TOOL_NAME,
     BACKEND_API_BASE,
     BEDROCK_KB_ID,
+    USE_LOCAL_MOCKS,
 )
 
 _resolved_kb_tool_name: str | None = None
@@ -20,6 +21,7 @@ _resolved_kb_tool_name: str | None = None
 def _hash_payload(payload: Dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
 
+
 def _is_local_backend() -> bool:
     try:
         host = urlparse(BACKEND_API_BASE).hostname or ""
@@ -27,12 +29,18 @@ def _is_local_backend() -> bool:
         host = ""
     return host in {"localhost", "127.0.0.1"} or host.endswith(".local")
 
+
+def _should_use_local_mocks() -> bool:
+    return USE_LOCAL_MOCKS and _is_local_backend()
+
+
 def _auth_headers(token: str) -> Dict[str, str]:
     if not token:
         return {}
     if token.lower().startswith("bearer "):
         return {"Authorization": token}
     return {"Authorization": f"Bearer {token}"}
+
 
 def _gateway_endpoint() -> str:
     if not AGENTCORE_GATEWAY_ENDPOINT:
@@ -60,6 +68,27 @@ def _gateway_jsonrpc(payload: Dict[str, Any], user_token: str) -> Dict[str, Any]
     return response.json()
 
 
+def _request_json(
+    method: str,
+    path: str,
+    user_token: str,
+    *,
+    params: Dict[str, Any] | None = None,
+    payload: Dict[str, Any] | None = None,
+    timeout: int = 15,
+) -> Dict[str, Any]:
+    response = requests.request(
+        method=method,
+        url=f"{BACKEND_API_BASE}{path}",
+        headers=_auth_headers(user_token),
+        params=params,
+        json=payload,
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def _mock_summary(range_days: str) -> Dict[str, Any]:
     return {
         "range": range_days,
@@ -75,49 +104,141 @@ def _mock_summary(range_days: str) -> Dict[str, Any]:
     }
 
 
+def _mock_forecast(horizon_months: int = 3) -> Dict[str, Any]:
+    points = []
+    for idx in range(max(1, min(24, horizon_months))):
+        month = f"2026-{idx+1:02d}"
+        points.append(
+            {
+                "month": month,
+                "income_estimate": 35_000_000,
+                "spend_estimate": 21_000_000,
+                "p10": 10_000_000,
+                "p50": 14_000_000,
+                "p90": 18_000_000,
+            }
+        )
+    return {
+        "forecast_points": points,
+        "monthly_forecast": points,
+        "confidence_band": {"p10_avg": 10_000_000, "p50_avg": 14_000_000, "p90_avg": 18_000_000},
+        "assumptions": ["Mocked forecast"],
+        "trace_id": "trc_mocked01",
+        "model_meta": {"model_version": "mock", "low_history": True},
+    }
+
+
 def sql_read_views(user_token: str, range_days: str) -> Dict[str, Any]:
-    if _is_local_backend():
+    if _should_use_local_mocks():
         return _mock_summary(range_days)
-    headers = _auth_headers(user_token)
     try:
-        response = requests.get(
-            f"{BACKEND_API_BASE}/aggregates/summary",
+        return _request_json(
+            "GET",
+            "/aggregates/summary",
+            user_token,
             params={"range": range_days},
-            headers=headers,
             timeout=10,
         )
-        response.raise_for_status()
-        return response.json()
-    except requests.RequestException:
-        return _mock_summary(range_days)
+    except requests.RequestException as exc:
+        raise RuntimeError("Backend call failed: GET /aggregates/summary") from exc
 
 
 def goals_get_set(user_token: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    if _is_local_backend():
+    if _should_use_local_mocks():
         return {"status": "mocked", "payload": payload}
-    headers = _auth_headers(user_token)
-    response = requests.post(
-        f"{BACKEND_API_BASE}/goals",
-        json=payload,
-        headers=headers,
-        timeout=10,
-    )
-    response.raise_for_status()
-    return response.json()
+    return _request_json("POST", "/goals", user_token, payload=payload, timeout=10)
 
 
 def notifications_send(user_token: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    if _is_local_backend():
+    if _should_use_local_mocks():
         return {"status": "mocked", "payload": payload}
-    headers = _auth_headers(user_token)
-    response = requests.post(
-        f"{BACKEND_API_BASE}/notifications",
-        json=payload,
-        headers=headers,
-        timeout=10,
-    )
-    response.raise_for_status()
-    return response.json()
+    return _request_json("POST", "/notifications", user_token, payload=payload, timeout=10)
+
+
+def forecast_cashflow(user_token: str, range_days: str = "90d") -> Dict[str, Any]:
+    if _should_use_local_mocks():
+        return _mock_forecast(horizon_months=3)
+    try:
+        return _request_json(
+            "GET",
+            "/forecast/cashflow",
+            user_token,
+            params={"range": range_days},
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        raise RuntimeError("Backend call failed: GET /forecast/cashflow") from exc
+
+
+def forecast_cashflow_scenario(user_token: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    if _should_use_local_mocks():
+        horizon = int(payload.get("horizon_months", 12))
+        return _mock_forecast(horizon)
+    try:
+        return _request_json("POST", "/forecast/cashflow/scenario", user_token, payload=payload, timeout=20)
+    except requests.RequestException as exc:
+        raise RuntimeError("Backend call failed: POST /forecast/cashflow/scenario") from exc
+
+
+def forecast_runway(user_token: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    if _should_use_local_mocks():
+        return {
+            "runway_months": 12,
+            "stress_result": [],
+            "risk_flags": [],
+            "trace_id": payload.get("trace_id", "trc_mocked01"),
+        }
+    try:
+        return _request_json("POST", "/forecast/runway", user_token, payload=payload, timeout=20)
+    except requests.RequestException as exc:
+        raise RuntimeError("Backend call failed: POST /forecast/runway") from exc
+
+
+def decision_savings_goal(user_token: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    if _should_use_local_mocks():
+        return {
+            "metrics": {"required_monthly_saving": 8_000_000, "gap_amount": 0},
+            "grade": "A",
+            "reasons": ["Mocked decision"],
+            "guardrails": [],
+            "trace_id": payload.get("trace_id", "trc_mocked01"),
+        }
+    return _request_json("POST", "/decision/savings-goal", user_token, payload=payload, timeout=20)
+
+
+def decision_house_affordability(user_token: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    if _should_use_local_mocks():
+        return {
+            "metrics": {"monthly_payment": 12_000_000, "DTI": 0.32},
+            "grade": "B",
+            "reasons": ["Mocked house affordability"],
+            "guardrails": [],
+            "trace_id": payload.get("trace_id", "trc_mocked01"),
+        }
+    return _request_json("POST", "/decision/house-affordability", user_token, payload=payload, timeout=20)
+
+
+def decision_investment_capacity(user_token: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    if _should_use_local_mocks():
+        return {
+            "metrics": {"investable_low": 2_000_000, "investable_high": 3_500_000},
+            "grade": "B",
+            "reasons": ["Mocked investment capacity"],
+            "guardrails": ["education_only=true"],
+            "trace_id": payload.get("trace_id", "trc_mocked01"),
+            "education_only": True,
+        }
+    return _request_json("POST", "/decision/investment-capacity", user_token, payload=payload, timeout=20)
+
+
+def decision_what_if(user_token: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    if _should_use_local_mocks():
+        return {
+            "scenario_comparison": [{"name": "base", "total_net_p50": 1}],
+            "best_variant_by_goal": "base",
+            "trace_id": payload.get("trace_id", "trc_mocked01"),
+        }
+    return _request_json("POST", "/decision/what-if", user_token, payload=payload, timeout=20)
 
 
 def _parse_kb_content(content: Any) -> Dict[str, Any]:
@@ -148,6 +269,7 @@ def _parse_kb_content(content: Any) -> Dict[str, Any]:
             }
         )
     return {"context": context_text, "matches": matches}
+
 
 def _resolve_kb_tool_name(user_token: str) -> str:
     global _resolved_kb_tool_name
@@ -197,9 +319,21 @@ def kb_retrieve(query: str, filters: Dict[str, str], user_token: str = "") -> Di
 
 
 def code_interpreter_run(expression: str) -> Dict[str, Any]:
-    # Placeholder for AgentCore Code Interpreter invocation.
     return {"result": f"Computed ETA for: {expression}", "assumptions": {"inflation": 0.04}}
 
 
-def audit_write(user_id: str, trace_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    return {"trace_id": trace_id, "payload_hash": _hash_payload(payload)}
+def audit_write(user_id: str, trace_id: str, payload: Dict[str, Any], user_token: str = "") -> Dict[str, Any]:
+    if _should_use_local_mocks():
+        return {"trace_id": trace_id, "payload_hash": _hash_payload(payload)}
+    try:
+        body = {
+            "trace_id": trace_id,
+            "event_type": "agent_summary",
+            "payload": {
+                **payload,
+                "user_id": user_id,
+            },
+        }
+        return _request_json("POST", "/audit", user_token, payload=body, timeout=10)
+    except requests.RequestException:
+        return {"trace_id": trace_id, "payload_hash": _hash_payload(payload)}

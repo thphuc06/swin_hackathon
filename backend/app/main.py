@@ -8,6 +8,8 @@ from app.routes import (
     aggregates,
     audit,
     chat,
+    decision,
+    forecast,
     goals,
     notifications,
     risk_profile,
@@ -30,6 +32,8 @@ app.include_router(aggregates.router)
 app.include_router(notifications.router)
 app.include_router(goals.router)
 app.include_router(risk_profile.router)
+app.include_router(forecast.router)
+app.include_router(decision.router)
 app.include_router(chat.router)
 app.include_router(audit.router)
 

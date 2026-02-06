@@ -12,6 +12,8 @@ class InMemoryStore:
     goals: Dict[str, Any] = field(default_factory=dict)
     risk_profiles: List[Dict[str, Any]] = field(default_factory=list)
     audit_events: List[Dict[str, Any]] = field(default_factory=list)
+    statement_imports: List[Dict[str, Any]] = field(default_factory=list)
+    tool_events: List[Dict[str, Any]] = field(default_factory=list)
 
     def add_transaction(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         record = {
@@ -38,6 +40,24 @@ class InMemoryStore:
             "created_at": datetime.utcnow().isoformat() + "Z",
         }
         self.audit_events.append(record)
+        return record
+
+    def add_statement_import(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        record = {
+            **payload,
+            "id": f"stmt_{len(self.statement_imports)+1}",
+            "created_at": datetime.utcnow().isoformat() + "Z",
+        }
+        self.statement_imports.append(record)
+        return record
+
+    def add_tool_event(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        record = {
+            **payload,
+            "id": f"tool_{len(self.tool_events)+1}",
+            "created_at": datetime.utcnow().isoformat() + "Z",
+        }
+        self.tool_events.append(record)
         return record
 
 

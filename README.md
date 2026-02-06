@@ -71,8 +71,11 @@ python main.py
 
 The agent runs on port 8080 (AgentCoreApp default).
 
-Note: When the agent is deployed to AWS Runtime, it cannot call your local backend.
-This MVP returns **mock data** when `BACKEND_API_BASE` is localhost.
+Local behavior is controlled by `USE_LOCAL_MOCKS` in `agent/.env`:
+- `USE_LOCAL_MOCKS=true` with `BACKEND_API_BASE=http://localhost:8010` -> return mock financial data for offline demo.
+- `USE_LOCAL_MOCKS=false` with `BACKEND_API_BASE=http://localhost:8010` -> call local backend APIs for real local E2E tests.
+
+When deployed to AWS Runtime, do not use localhost for `BACKEND_API_BASE`.
 
 ### 4) MCP server (optional local)
 
@@ -96,6 +99,7 @@ agentcore configure -e main.py
 agentcore deploy --auto-update-on-conflict \
   --env AWS_REGION=us-east-1 \
   --env BEDROCK_MODEL_ID=amazon.nova-pro-v1:0 \
+  --env BACKEND_API_BASE=https://<public-backend-url> \
   --env BEDROCK_KB_ID=G6GLWTUKEL \
   --env AGENTCORE_GATEWAY_ENDPOINT=https://<gateway-id>.gateway.bedrock-agentcore.<region>.amazonaws.com/mcp \
   --env LOG_LEVEL=info

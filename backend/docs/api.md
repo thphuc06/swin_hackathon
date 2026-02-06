@@ -2,106 +2,150 @@
 
 Base URL: `http://localhost:8010`
 
-## POST /transactions/transfer
+Auth:
+- Most endpoints require `Authorization: Bearer <access_token>`.
+- For local dev only, set `DEV_BYPASS_AUTH=true` in `backend/.env`.
+
+## GET /health
+Returns backend liveness.
+
+## Transactions
+
+### POST /transactions/transfer
 Body:
 ```json
 { "jar_id": "jar_house", "category_id": "cat_rent", "amount": 5000000, "counterparty": "Landlord" }
 ```
 
-## POST /transactions/suggest
-Suggest `jar_id` + `category_id` (Top-K + confidence) from messy transaction text.
+### GET /transactions?range=30d|60d
+Returns user-scoped transaction list.
 
-Body:
+### POST /transactions/import/statement
+Import and parse VN statement (CSV/TXT/TSV parser for MVP).
+
 ```json
 {
-  "counterparty": "Landlord",
-  "amount": 5000000,
+  "file_ref": "C:/data/statement.csv",
+  "bank_hint": "vcb",
   "currency": "VND",
-  "raw_narrative": "MBVCB... CHUYEN TIEN THUE NHA T2",
-  "user_note": "",
-  "channel": "transfer",
-  "direction": "debit"
+  "rules_counterparty_map": [
+    { "counterparty_norm": "LANDLORD", "jar_id": "jar_house", "category_id": "cat_rent" }
+  ]
 }
 ```
 
-## GET /transactions?range=30d|60d
-Returns user-scoped list.
+## Aggregates
 
-## GET /aggregates/summary?range=30d|60d
+### GET /aggregates/summary?range=30d|60d
 Returns totals and largest transaction.
 
-## GET /notifications
-Returns Tier1 insights.
+## Notifications
 
-## GET /jars
-List user-defined jars.
+### GET /notifications
+Returns user-scoped notification list.
 
-## POST /jars
-Create a jar (improves personalization + categorization).
-
+### POST /notifications
 ```json
-{
-  "name": "Ví đi chơi với người yêu",
-  "description": "Date nights, travel, movies, cafes",
-  "keywords": ["cgv", "highlands", "grab", "pizza"]
-}
+{ "title": "Runway alert", "detail": "Runway below 6 months", "trace_id": "trc_abc123" }
 ```
 
-## GET /jars/templates
-List default jar templates for first-time users.
+## Goals
 
-## POST /jars/seed-defaults
-Create default jars for a user (one-time init).
-
-## GET /signals/summary
-Returns data quality + behavior signals for UI and Tier2 (example: % categorized, discipline score).
-
-## GET /forecast/cashflow?range=90d
-Returns 90-day cashflow/runway projection (truth from views; can start heuristic).
-
-## POST /rules/counterparty
-Persist a mapping rule for messy data (counterparty -> jar/category).
-
-```json
-{
-  "counterparty_norm": "LANDLORD",
-  "jar_id": "jar_bills",
-  "category_id": "cat_rent"
-}
-```
-
-## GET /budgets
-List budgets/thresholds for proactive alerts.
-
-## POST /budgets
-Create/update a budget threshold (jar/category scope).
-
-```json
-{
-  "scope_type": "jar",
-  "scope_id": "jar_fun",
-  "period": "weekly",
-  "limit_amount": 1500000,
-  "currency": "VND",
-  "active": true
-}
-```
-
-## POST /goals
+### POST /goals
 ```json
 { "name": "buy house", "target_amount": 650000000, "horizon_months": 84 }
 ```
 
-## GET /risk-profile
-Returns latest risk profile.
+## Risk Profile
 
-## POST /risk-profile
+### GET /risk-profile
+Returns current risk profile.
+
+### POST /risk-profile
 ```json
 { "profile": "balanced", "notes": "moderate volatility" }
 ```
 
-## POST /chat/stream
-SSE stream from AgentCore Runtime.
+## Forecast
 
-## GET /audit/{trace_id}
-Returns audit record for demo transparency.
+### GET /forecast/cashflow?range=90d
+Returns projected cashflow with confidence band.
+
+### POST /forecast/cashflow/scenario
+Run scenario-based forecast (1-24 months).
+
+```json
+{
+  "horizon_months": 12,
+  "seasonality": true,
+  "scenario_overrides": { "income_delta_pct": -0.1, "spend_delta_pct": 0.08 }
+}
+```
+
+### POST /forecast/runway
+Compute runway and stress flags from forecast.
+
+```json
+{
+  "forecast": { "monthly_forecast": [] },
+  "cash_buffer": 120000000,
+  "stress_config": { "income_drop_pct": 0.2, "spend_spike_pct": 0.15, "runway_threshold_months": 6 }
+}
+```
+
+## Decision
+
+### POST /decision/savings-goal
+```json
+{ "target_amount": 500000000, "horizon_months": 24 }
+```
+
+### POST /decision/house-affordability
+```json
+{
+  "house_price": 3000000000,
+  "down_payment": 900000000,
+  "interest_rate": 10,
+  "loan_years": 20,
+  "fees": 60000000
+}
+```
+
+### POST /decision/investment-capacity
+```json
+{
+  "risk_profile": "balanced",
+  "emergency_target": 120000000,
+  "cash_buffer": 70000000
+}
+```
+
+### POST /decision/what-if
+```json
+{
+  "base_scenario": { "horizon_months": 12, "seasonality": true, "scenario_overrides": {} },
+  "variants": [
+    { "name": "delay_purchase_12m", "scenario_overrides": { "spend_delta_pct": -0.1 } }
+  ],
+  "goal": "house"
+}
+```
+
+## Chat
+
+### POST /chat/stream
+SSE stream from AgentCore Runtime or local AgentCore app.
+
+## Audit
+
+### POST /audit
+```json
+{
+  "trace_id": "trc_abc123",
+  "event_type": "agent_summary",
+  "payload": { "summary": "...", "tool_calls": ["forecast_cashflow_core"] }
+}
+```
+
+### GET /audit/{trace_id}
+Returns audit event and tool chain for the trace ID.

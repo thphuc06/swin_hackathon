@@ -22,6 +22,7 @@ def invoke(payload: Dict[str, Any]) -> Dict[str, Any]:
         "result": result["response"],
         "trace_id": result["trace_id"],
         "citations": result["citations"].get("matches", []),
+        "tool_calls": result.get("tool_calls", []),
         "disclaimer": "Educational guidance only. We do not provide investment advice.",
     }
 
