@@ -15,11 +15,14 @@ from tools import (
     anomaly_signals,
     audit_write,
     cashflow_forecast_tool,
+    goal_feasibility_tool,
     jar_allocation_suggest_tool,
     kb_retrieve,
+    recurring_cashflow_detect_tool,
     risk_profile_non_investment_tool,
     spend_analytics,
     suitability_guard_tool,
+    what_if_scenario_tool,
 )
 
 
@@ -79,7 +82,9 @@ def _requested_action(prompt: str) -> str:
 
 def intent_router(state: AgentState) -> AgentState:
     normalized = _normalize_text(state["prompt"])
-    if any(term in normalized for term in ["house", "saving", "goal", "plan", "mua nha", "tiet kiem"]):
+    if any(term in normalized for term in ["what if", "gia su", "neu", "kich ban", "scenario"]):
+        state["intent"] = "scenario"
+    elif any(term in normalized for term in ["house", "saving", "goal", "plan", "mua nha", "tiet kiem"]):
         state["intent"] = "planning"
     elif any(term in normalized for term in ["risk", "runway", "anomaly", "alert"]):
         state["intent"] = "risk"
@@ -163,7 +168,33 @@ def decision_engine(state: AgentState) -> AgentState:
         state["tool_outputs"]["risk_profile_non_investment_v1"] = risk
         state["tool_calls"].append("anomaly_signals_v1")
         state["tool_calls"].append("risk_profile_non_investment_v1")
-    elif intent in {"planning", "summary"}:
+    elif intent == "planning":
+        allocation = jar_allocation_suggest_tool(
+            state["user_token"],
+            user_id=state["user_id"],
+            trace_id=state["trace_id"],
+        )
+        recurring = recurring_cashflow_detect_tool(
+            state["user_token"],
+            user_id=state["user_id"],
+            lookback_months=6,
+            min_occurrence_months=3,
+            trace_id=state["trace_id"],
+        )
+        goal = goal_feasibility_tool(
+            state["user_token"],
+            user_id=state["user_id"],
+            target_amount=None,
+            horizon_months=12,
+            trace_id=state["trace_id"],
+        )
+        state["tool_outputs"]["jar_allocation_suggest_v1"] = allocation
+        state["tool_outputs"]["recurring_cashflow_detect_v1"] = recurring
+        state["tool_outputs"]["goal_feasibility_v1"] = goal
+        state["tool_calls"].append("jar_allocation_suggest_v1")
+        state["tool_calls"].append("recurring_cashflow_detect_v1")
+        state["tool_calls"].append("goal_feasibility_v1")
+    elif intent == "summary":
         allocation = jar_allocation_suggest_tool(
             state["user_token"],
             user_id=state["user_id"],
@@ -171,6 +202,17 @@ def decision_engine(state: AgentState) -> AgentState:
         )
         state["tool_outputs"]["jar_allocation_suggest_v1"] = allocation
         state["tool_calls"].append("jar_allocation_suggest_v1")
+    elif intent == "scenario":
+        scenario = what_if_scenario_tool(
+            state["user_token"],
+            user_id=state["user_id"],
+            horizon_months=12,
+            seasonality=True,
+            goal="maximize_savings",
+            trace_id=state["trace_id"],
+        )
+        state["tool_outputs"]["what_if_scenario_v1"] = scenario
+        state["tool_calls"].append("what_if_scenario_v1")
     elif intent == "invest":
         risk = risk_profile_non_investment_tool(
             state["user_token"],

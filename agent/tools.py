@@ -294,6 +294,101 @@ def suitability_guard_tool(
     )
 
 
+def recurring_cashflow_detect_tool(
+    user_token: str,
+    user_id: str,
+    lookback_months: int = 6,
+    min_occurrence_months: int = 3,
+    recurring_overrides: list[Dict[str, Any]] | None = None,
+    trace_id: str | None = None,
+) -> Dict[str, Any]:
+    if _should_use_local_mocks():
+        return {
+            "recurring_income": [],
+            "recurring_expense": [{"counterparty_norm": "LANDLORD", "average_amount": 9000000}],
+            "fixed_cost_ratio": 0.42,
+            "drift_alerts": [],
+            "trace_id": "trc_mocked01",
+        }
+    return _call_gateway_tool(
+        "recurring_cashflow_detect_v1",
+        {
+            "user_id": user_id,
+            "lookback_months": lookback_months,
+            "min_occurrence_months": min_occurrence_months,
+            "recurring_overrides": recurring_overrides or [],
+            "trace_id": trace_id,
+        },
+        user_token,
+    )
+
+
+def goal_feasibility_tool(
+    user_token: str,
+    user_id: str,
+    target_amount: float | None = None,
+    horizon_months: int | None = None,
+    goal_id: str | None = None,
+    seasonality: bool = True,
+    trace_id: str | None = None,
+) -> Dict[str, Any]:
+    if _should_use_local_mocks():
+        return {
+            "required_monthly_saving": 8_000_000,
+            "feasible": True,
+            "gap_amount": 0,
+            "grade": "A",
+            "trace_id": "trc_mocked01",
+        }
+    return _call_gateway_tool(
+        "goal_feasibility_v1",
+        {
+            "user_id": user_id,
+            "target_amount": target_amount,
+            "horizon_months": horizon_months,
+            "goal_id": goal_id,
+            "seasonality": seasonality,
+            "trace_id": trace_id,
+        },
+        user_token,
+    )
+
+
+def what_if_scenario_tool(
+    user_token: str,
+    user_id: str,
+    horizon_months: int = 12,
+    seasonality: bool = True,
+    goal: str = "maximize_savings",
+    base_scenario_overrides: Dict[str, Any] | None = None,
+    variants: list[Dict[str, Any]] | None = None,
+    trace_id: str | None = None,
+) -> Dict[str, Any]:
+    if _should_use_local_mocks():
+        return {
+            "scenario_comparison": [
+                {"name": "base", "delta_vs_base": 0},
+                {"name": "cut_discretionary_spend_15pct", "delta_vs_base": 5_000_000},
+            ],
+            "best_variant_by_goal": "cut_discretionary_spend_15pct",
+            "base_total_net_p50": 40_000_000,
+            "trace_id": "trc_mocked01",
+        }
+    return _call_gateway_tool(
+        "what_if_scenario_v1",
+        {
+            "user_id": user_id,
+            "horizon_months": horizon_months,
+            "seasonality": seasonality,
+            "goal": goal,
+            "base_scenario_overrides": base_scenario_overrides or {},
+            "variants": variants,
+            "trace_id": trace_id,
+        },
+        user_token,
+    )
+
+
 # Legacy aliases retained for compatibility.
 def sql_read_views(user_token: str, range_days: str, user_id: str = "demo-user") -> Dict[str, Any]:
     return spend_analytics(user_token, user_id=user_id, range_days=range_days)
@@ -376,11 +471,17 @@ def decision_investment_capacity(user_token: str, payload: Dict[str, Any]) -> Di
 
 
 def decision_what_if(user_token: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "scenario_comparison": [],
-        "best_variant_by_goal": "base",
-        "trace_id": payload.get("trace_id", "trc_mocked01"),
-    }
+    user_id = str(payload.get("user_id") or "demo-user")
+    return what_if_scenario_tool(
+        user_token,
+        user_id=user_id,
+        horizon_months=int(payload.get("horizon_months") or 12),
+        seasonality=bool(payload.get("seasonality", True)),
+        goal=str(payload.get("goal") or "maximize_savings"),
+        base_scenario_overrides=payload.get("base_scenario_overrides") or {},
+        variants=payload.get("variants"),
+        trace_id=payload.get("trace_id"),
+    )
 
 
 def _parse_kb_content(content: Any) -> Dict[str, Any]:

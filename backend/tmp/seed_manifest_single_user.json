@@ -1,0 +1,52 @@
+{
+  "generated_at": "2026-02-07T11:31:08Z",
+  "generated_row_counts": {
+    "all_transactions": 5012,
+    "budgets": 0,
+    "categories": 15,
+    "debit_transactions": 5000,
+    "goals": 0,
+    "income_events": 12,
+    "income_sources": 1,
+    "jars": 5,
+    "profiles": 1,
+    "salary_transactions": 12,
+    "users": 1
+  },
+  "input_hashes": {
+    "category_mapping_sha256": "78ee1975aeb99db15d9581be48f593040f93da8d7c9d24839e1966659a3b9b52",
+    "sparkov_test_sha256": "12d553ab19440c752d2531ee1af44bb64f12cc3d3839f1649f19e81c230545f0",
+    "sparkov_train_sha256": "fd7139200dbfcbed0b6742bbe05a4f1abce532c4fef20918228a651647a3e75d"
+  },
+  "parameters": {
+    "currency": "VND",
+    "fx_rate": 25000,
+    "include_goal_budget": false,
+    "seed": 20260207,
+    "target_debit_rows": 5000
+  },
+  "params_hash": "ecc8b5f54a38d277496146190ea0cc081a671dac88b77a9ba170a4a33063d16b",
+  "salary": {
+    "salary_amount": 673389000,
+    "salary_event_count": 12,
+    "salary_multiplier": 0.999494
+  },
+  "seed_namespace": "11d85697-44c4-4f56-9ea1-f8e2d8f9371d",
+  "seed_user_id": "64481438-5011-7008-00f8-03e42cc06593",
+  "seed_version": "seed_single_user_v1",
+  "selection_stats": {
+    "nonfraud_rows": 1842743,
+    "parse_errors": 0,
+    "total_rows": 1852394
+  },
+  "validation_summary": {
+    "all_pass": true,
+    "check_count": 10,
+    "pass_count": 10
+  },
+  "window": {
+    "end": "2026-01-31T23:59:59Z",
+    "months": 12,
+    "start": "2025-02-01T00:00:00Z"
+  }
+}

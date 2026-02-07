@@ -49,6 +49,7 @@ Repo structure + responsibilities
 - frontend/: Next.js + Tailwind, minimal UI, streaming chat, show citations/disclaimer/trace.
 - backend/: FastAPI BFF, REST + /chat/stream proxy, JWT auth, EventBridge emit.
 - agent/: LangGraph + AgentCore Runtime entrypoint, tool adapters, guard logic.
+- src/aws-finance-mcp-server/: standalone Finance MCP service (JSON-RPC /mcp) for deterministic SQL-first advisory tools.
 - workers/: aggregation + trigger + notification writer (Tier1).
 - kb/: policy/templates/services corpus + metadata tags.
 - iac/: Terraform/CDK skeleton (Runtime/Gateway/Policy/roles/networking).
@@ -93,6 +94,14 @@ Training & data plan: see `model_data_train.md`.
 | kb_retrieve | MCP KB server -> Bedrock KB | KB retrieve | citations + governance |
 | code_interpreter_run | AgentCore CI | n/a | what-if ETA |
 | audit_write | BFF/log | POST /audit | trace + decision |
+| recurring_cashflow_detect_v1 | Finance MCP | tools/call | detect recurring/fixed costs + drift alerts |
+| goal_feasibility_v1 | Finance MCP | tools/call | evaluate savings goal feasibility + gap |
+| what_if_scenario_v1 | Finance MCP | tools/call | compare multiple scenario variants deterministically |
+
+Finance MCP tools currently implemented (`src/aws-finance-mcp-server`)
+- Core 6 tools: `spend_analytics_v1`, `anomaly_signals_v1`, `cashflow_forecast_v1`, `jar_allocation_suggest_v1`, `risk_profile_non_investment_v1`, `suitability_guard_v1`.
+- Extended 3 tools: `recurring_cashflow_detect_v1`, `goal_feasibility_v1`, `what_if_scenario_v1`.
+- All 9 tools return the same audit envelope: `trace_id`, `version`, `params_hash`, `sql_snapshot_ts`, `audit`.
 
 DB schema (list, key fields)
 - users (id, email, created_at)

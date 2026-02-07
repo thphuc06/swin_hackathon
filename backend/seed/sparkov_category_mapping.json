@@ -1,0 +1,19 @@
+{
+  "category_to_bucket": {
+    "gas_transport": { "jar": "Living", "category": "Transport", "channel": "card_pos" },
+    "grocery_net": { "jar": "Living", "category": "Groceries", "channel": "card_online" },
+    "grocery_pos": { "jar": "Living", "category": "Groceries", "channel": "card_pos" },
+    "misc_net": { "jar": "Misc", "category": "Misc Online", "channel": "card_online" },
+    "misc_pos": { "jar": "Misc", "category": "Misc In Store", "channel": "card_pos" },
+    "shopping_net": { "jar": "Goals", "category": "Shopping Online", "channel": "card_online" },
+    "shopping_pos": { "jar": "Goals", "category": "Shopping In Store", "channel": "card_pos" },
+    "entertainment": { "jar": "Living", "category": "Entertainment", "channel": "card_pos" },
+    "food_dining": { "jar": "Living", "category": "Food & Dining", "channel": "card_pos" },
+    "health_fitness": { "jar": "Bills", "category": "Health & Fitness", "channel": "card_pos" },
+    "home": { "jar": "Bills", "category": "Home Utilities", "channel": "transfer" },
+    "kids_pets": { "jar": "Living", "category": "Kids & Pets", "channel": "card_pos" },
+    "personal_care": { "jar": "Living", "category": "Personal Care", "channel": "card_pos" },
+    "travel": { "jar": "Goals", "category": "Travel", "channel": "card_online" }
+  },
+  "fallback": { "jar": "Misc", "category": "Other", "channel": "other" }
+}

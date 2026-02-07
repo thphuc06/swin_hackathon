@@ -21,6 +21,7 @@ Minimal AWS-first fintech advisory demo built on Amazon Bedrock AgentCore Runtim
 /kb
 /iac
 /src/aws-kb-retrieval-server
+/src/aws-finance-mcp-server
 ```
 
 ## Local quick start
@@ -77,9 +78,29 @@ Local behavior is controlled by `USE_LOCAL_MOCKS` in `agent/.env`:
 
 When deployed to AWS Runtime, do not use localhost for `BACKEND_API_BASE`.
 
-### 4) MCP server (optional local)
+### 4) MCP servers (optional local)
 
-See `src/aws-kb-retrieval-server/README.md` for local run and Docker instructions.
+KB MCP:
+- See `src/aws-kb-retrieval-server/README.md` for local run and Docker instructions.
+
+Finance MCP:
+
+```bash
+cd src/aws-finance-mcp-server
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+cp .env.example .env
+uvicorn app.main:app --host 127.0.0.1 --port 8020
+```
+
+Quick smoke check:
+
+```powershell
+cd C:\HCMUS\PYTHON\jars-fintech-agentcore-mvp\src\aws-finance-mcp-server
+$seed = (Get-Content ..\..\backend\tmp\seed_manifest_single_user.json | ConvertFrom-Json).seed_user_id
+.\scripts\run_finance_mcp_smoke.ps1 -BaseUrl "http://127.0.0.1:8020" -SeedUserId $seed
+```
 
 ## Deploy Agent to AgentCore Runtime (Starter Toolkit)
 
@@ -130,7 +151,17 @@ Use **AccessToken** (token_use=access) when AgentCore is configured with `allowe
 - Configure the Gateway target URL to the MCP server `/mcp` endpoint.
 - Gateway tool names can be prefixed (for example: `target-xyz___retrieve_from_aws_kb`).
 - The agent can auto-discover the tool name, or you can set `AGENTCORE_GATEWAY_TOOL_NAME`.
-- Financial tools are now exposed by backend MCP endpoint (`/mcp`) and should be added as a second Gateway target (for example `finance-mcp`).
+- Financial tools are exposed by the standalone service in `src/aws-finance-mcp-server` and should be added as a second Gateway target (for example `finance-mcp`).
+- Current finance MCP tool set:
+  - `spend_analytics_v1`
+  - `anomaly_signals_v1`
+  - `cashflow_forecast_v1`
+  - `jar_allocation_suggest_v1`
+  - `risk_profile_non_investment_v1`
+  - `suitability_guard_v1`
+  - `recurring_cashflow_detect_v1`
+  - `goal_feasibility_v1`
+  - `what_if_scenario_v1`
 
 ## Knowledge Base (RAG)
 

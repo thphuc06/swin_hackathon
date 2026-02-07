@@ -1,0 +1,121 @@
+{
+  "checks": [
+    {
+      "detail": {
+        "transaction_count": 5012
+      },
+      "name": "integrity_all_transactions_belong_to_user",
+      "passed": true
+    },
+    {
+      "detail": {
+        "known_category_count": 15,
+        "known_jar_count": 5
+      },
+      "name": "integrity_jar_and_category_fk_coverage",
+      "passed": true
+    },
+    {
+      "detail": {
+        "actual": 5000,
+        "expected": 5000
+      },
+      "name": "volume_debit_rows_match_target",
+      "passed": true
+    },
+    {
+      "detail": {
+        "actual": 12,
+        "expected": 12
+      },
+      "name": "volume_credit_rows_match_salary_events",
+      "passed": true
+    },
+    {
+      "detail": {
+        "months_present": 12,
+        "required": 12
+      },
+      "name": "time_spans_full_month_window",
+      "passed": true
+    },
+    {
+      "detail": {
+        "max_occurred_at": "2026-01-31T23:59:59Z",
+        "now_utc": "2026-02-07T11:37:38Z"
+      },
+      "name": "time_no_future_dates",
+      "passed": true
+    },
+    {
+      "detail": {
+        "positive_months": 6,
+        "tight_months": 6
+      },
+      "name": "advisory_monthly_cashflow_has_positive_and_tight_months",
+      "passed": true
+    },
+    {
+      "detail": {
+        "window_counts": {
+          "30": 540,
+          "60": 909,
+          "90": 1418
+        }
+      },
+      "name": "advisory_spend_windows_non_empty",
+      "passed": true
+    },
+    {
+      "detail": {
+        "ratio": 1.0,
+        "threshold": 0.99
+      },
+      "name": "narrative_non_empty_ratio",
+      "passed": true
+    },
+    {
+      "detail": {
+        "ratio": 1.0,
+        "threshold": 0.99
+      },
+      "name": "counterparty_non_empty_ratio",
+      "passed": true
+    }
+  ],
+  "db_counts": {
+    "categories": 15,
+    "income_events": 12,
+    "income_sources": 1,
+    "jars": 5,
+    "profiles": 1,
+    "transactions": 5012,
+    "users": 1
+  },
+  "metrics": {
+    "credit_rows": 12,
+    "debit_rows": 5000,
+    "max_occurred_at": "2026-01-31T23:59:59Z",
+    "min_occurred_at": "2025-02-01T00:00:00Z",
+    "monthly_net_cashflow": {
+      "2025-02": 320150000.0,
+      "2025-03": 27982000.0,
+      "2025-04": -89720000.0,
+      "2025-05": -60101000.0,
+      "2025-06": -45738000.0,
+      "2025-07": -320150000.0,
+      "2025-08": 202640000.0,
+      "2025-09": 141888000.0,
+      "2025-10": 46241000.0,
+      "2025-11": -60043000.0,
+      "2025-12": 32157000.0,
+      "2026-01": -199400000.0
+    },
+    "total_transactions": 5012
+  },
+  "summary": {
+    "all_pass": true,
+    "check_count": 10,
+    "pass_count": 10
+  }
+}
