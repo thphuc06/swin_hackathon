@@ -130,6 +130,7 @@ Use **AccessToken** (token_use=access) when AgentCore is configured with `allowe
 - Configure the Gateway target URL to the MCP server `/mcp` endpoint.
 - Gateway tool names can be prefixed (for example: `target-xyz___retrieve_from_aws_kb`).
 - The agent can auto-discover the tool name, or you can set `AGENTCORE_GATEWAY_TOOL_NAME`.
+- Financial tools are now exposed by backend MCP endpoint (`/mcp`) and should be added as a second Gateway target (for example `finance-mcp`).
 
 ## Knowledge Base (RAG)
 

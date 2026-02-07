@@ -6,7 +6,6 @@ import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-import requests
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -15,10 +14,16 @@ if str(ROOT) not in sys.path:
 
 class LocalMockToggleTests(unittest.TestCase):
     def setUp(self) -> None:
+        self._prev_gateway = os.environ.get("AGENTCORE_GATEWAY_ENDPOINT")
         self._prev_backend_api_base = os.environ.get("BACKEND_API_BASE")
         self._prev_use_local_mocks = os.environ.get("USE_LOCAL_MOCKS")
 
     def tearDown(self) -> None:
+        if self._prev_gateway is None:
+            os.environ.pop("AGENTCORE_GATEWAY_ENDPOINT", None)
+        else:
+            os.environ["AGENTCORE_GATEWAY_ENDPOINT"] = self._prev_gateway
+
         if self._prev_backend_api_base is None:
             os.environ.pop("BACKEND_API_BASE", None)
         else:
@@ -35,9 +40,10 @@ class LocalMockToggleTests(unittest.TestCase):
         importlib.reload(config)
         importlib.reload(tools)
 
-    def _reload_tools(self, backend_api_base: str, use_local_mocks: bool):
+    def _reload_tools(self, backend_api_base: str, use_local_mocks: bool, gateway: str = ""):
         os.environ["BACKEND_API_BASE"] = backend_api_base
         os.environ["USE_LOCAL_MOCKS"] = "true" if use_local_mocks else "false"
+        os.environ["AGENTCORE_GATEWAY_ENDPOINT"] = gateway
 
         import config
         import tools
@@ -45,28 +51,19 @@ class LocalMockToggleTests(unittest.TestCase):
         importlib.reload(config)
         return importlib.reload(tools)
 
-    def test_localhost_uses_mock_when_enabled(self) -> None:
-        tools = self._reload_tools("http://localhost:8010", True)
+    def test_localhost_without_gateway_uses_mock_when_enabled(self) -> None:
+        tools = self._reload_tools("http://localhost:8010", True, "")
+        result = tools.forecast_cashflow("token", "90d", user_id="user-1")
+        self.assertEqual(result.get("trace_id"), "trc_mocked01")
 
-        with patch("tools._request_json") as mocked_request:
-            result = tools.forecast_cashflow("token", "90d")
-            self.assertEqual(result.get("trace_id"), "trc_mocked01")
-            mocked_request.assert_not_called()
+    def test_gateway_call_used_when_mocks_disabled(self) -> None:
+        tools = self._reload_tools("http://localhost:8010", False, "https://gateway.example.com/mcp")
+        expected = {"trace_id": "trc_real01", "points": []}
 
-    def test_localhost_calls_backend_when_disabled(self) -> None:
-        tools = self._reload_tools("http://localhost:8010", False)
-        expected = {"trace_id": "trc_real01", "forecast_points": []}
-
-        with patch("tools._request_json", return_value=expected) as mocked_request:
-            result = tools.forecast_cashflow("token", "90d")
+        with patch("tools._call_gateway_tool", return_value=expected) as mocked_call:
+            result = tools.cashflow_forecast_tool("token", "user-1", "weekly_12")
             self.assertEqual(result, expected)
-            mocked_request.assert_called_once()
-
-    def test_backend_error_raises_when_local_mocks_disabled(self) -> None:
-        tools = self._reload_tools("http://localhost:8010", False)
-        with patch("tools._request_json", side_effect=requests.RequestException("boom")):
-            with self.assertRaises(RuntimeError):
-                tools.forecast_cashflow("token", "90d")
+            mocked_call.assert_called_once()
 
 
 if __name__ == "__main__":

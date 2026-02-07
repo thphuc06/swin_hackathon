@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
-from app.services.financial_tools import (
+from app.services.finance import (
     compute_runway_and_stress,
     evaluate_house_affordability,
     evaluate_investment_capacity,

@@ -16,8 +16,8 @@ This note answers:
 
 | Repo / Service | Decision | Why | Integration |
 |---|---|---|---|
-| River | Use (Phase 1) | Best fit for streaming anomaly + drift in deterministic pipeline | Worker service (`workers/`) + backend read API for latest anomaly flags |
-| PyOD | Use later | Good anomaly baseline pack, but mostly batch/offline | Offline evaluation job only; do not put deep models on request path |
+| River | Use (Now) | Best fit for streaming anomaly + drift in deterministic pipeline | Backend `anomaly_signals_v1` integrates ADWIN; worker extension later |
+| PyOD | Use (Now) | Strong deterministic outlier baseline (ECOD) | Backend `anomaly_signals_v1` integrates ECOD score/flag |
 | Kats | Skip for now | Useful, but release cadence is old for core dependency | Keep only as benchmark notebook/reference |
 | Darts | Use later | Strong forecasting toolkit, heavier dependencies | ECS forecast worker after MVP |
 | Actual Budget | Reference only (now) | Great envelope budgeting/jar logic patterns | Implement own deterministic jar allocator in Python (no runtime dependency) |
@@ -54,8 +54,9 @@ This note answers:
   - Keep orchestration in `backend/app/routes/forecast.py`.
 
 3. Realtime anomaly + shift detection (tool family 2)
-- River in worker path for streaming anomaly/drift state.
-- `ruptures` for periodic change-point detection (income drop/category spike).
+- River ADWIN integrated in backend anomaly tool for drift signal.
+- PyOD ECOD integrated in backend anomaly tool for outlier probability.
+- Optional hooks for Kats CUSUM are present for environments with Kats installed.
 - Deployment:
   - Worker consumes transaction events and stores latest user-level anomaly signals.
   - Backend reads latest signal snapshot for chat/tool response.

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from app.services.auth import current_user
-from app.services.financial_tools import ingest_statement_vn, normalize_and_categorize_txn
+from app.services.finance import ingest_statement_vn, normalize_and_categorize_txn
 from app.services.store import store
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])

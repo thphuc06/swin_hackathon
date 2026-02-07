@@ -11,6 +11,7 @@ from app.routes import (
     decision,
     forecast,
     goals,
+    mcp,
     notifications,
     risk_profile,
     transactions,
@@ -36,6 +37,7 @@ app.include_router(forecast.router)
 app.include_router(decision.router)
 app.include_router(chat.router)
 app.include_router(audit.router)
+app.include_router(mcp.router)
 
 
 @app.get("/health")

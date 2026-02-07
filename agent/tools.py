@@ -15,7 +15,7 @@ from config import (
     USE_LOCAL_MOCKS,
 )
 
-_resolved_kb_tool_name: str | None = None
+_resolved_tool_names: Dict[str, str] = {}
 
 
 def _hash_payload(payload: Dict[str, Any]) -> str:
@@ -31,7 +31,7 @@ def _is_local_backend() -> bool:
 
 
 def _should_use_local_mocks() -> bool:
-    return USE_LOCAL_MOCKS and _is_local_backend()
+    return USE_LOCAL_MOCKS and (not AGENTCORE_GATEWAY_ENDPOINT or _is_local_backend())
 
 
 def _auth_headers(token: str) -> Dict[str, str]:
@@ -56,16 +56,17 @@ def _gateway_jsonrpc(payload: Dict[str, Any], user_token: str) -> Dict[str, Any]
     endpoint = _gateway_endpoint()
     if not endpoint:
         raise RuntimeError("AGENTCORE_GATEWAY_ENDPOINT not configured")
-    if not AGENTCORE_GATEWAY_ENDPOINT:
-        raise RuntimeError("AGENTCORE_GATEWAY_ENDPOINT not configured")
     response = requests.post(
         endpoint,
         json=payload,
         headers=_auth_headers(user_token),
-        timeout=20,
+        timeout=25,
     )
     response.raise_for_status()
-    return response.json()
+    data = response.json()
+    if "error" in data:
+        raise RuntimeError(f"Gateway tool error: {data['error']}")
+    return data
 
 
 def _request_json(
@@ -89,28 +90,73 @@ def _request_json(
     return response.json()
 
 
-def _mock_summary(range_days: str) -> Dict[str, Any]:
+def _parse_tool_result_content(content: Any) -> Dict[str, Any]:
+    if not isinstance(content, list):
+        return {}
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if not isinstance(text, str):
+            continue
+        stripped = text.strip()
+        if stripped.startswith("{") and stripped.endswith("}"):
+            try:
+                parsed = json.loads(stripped)
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                continue
+    return {}
+
+
+def _resolve_tool_name(base_name: str, user_token: str) -> str:
+    if base_name in _resolved_tool_names:
+        return _resolved_tool_names[base_name]
+
+    data = _gateway_jsonrpc({"jsonrpc": "2.0", "id": "tools-1", "method": "tools/list"}, user_token)
+    tools = (data.get("result") or {}).get("tools", [])
+    for tool in tools:
+        name = str(tool.get("name") or "")
+        if name == base_name or name.endswith(f"___{base_name}"):
+            _resolved_tool_names[base_name] = name
+            return name
+    raise RuntimeError(f"Tool {base_name} not found in AgentCore Gateway tools/list")
+
+
+def _call_gateway_tool(base_name: str, arguments: Dict[str, Any], user_token: str) -> Dict[str, Any]:
+    resolved_name = _resolve_tool_name(base_name, user_token)
+    payload = {
+        "jsonrpc": "2.0",
+        "id": f"tool-{base_name}",
+        "method": "tools/call",
+        "params": {"name": resolved_name, "arguments": arguments},
+    }
+    data = _gateway_jsonrpc(payload, user_token)
+    content = (data.get("result") or {}).get("content", [])
+    return _parse_tool_result_content(content)
+
+
+def _mock_spend(range_days: str) -> Dict[str, Any]:
     return {
         "range": range_days,
         "total_spend": 14_200_000,
         "total_income": 38_200_000,
-        "largest_txn": {"amount": 5_500_000, "merchant": "Techcombank"},
-        "jar_breakdown": [
-            {"jar": "Bills", "amount": 4_200_000},
-            {"jar": "Living", "amount": 6_800_000},
-            {"jar": "Goals", "amount": 3_200_000},
-        ],
-        "note": "Mocked context (backend not reachable from runtime).",
+        "net_cashflow": 24_000_000,
+        "jar_splits": [],
+        "top_merchants": [],
+        "budget_drift": [],
+        "trace_id": "trc_mocked01",
     }
 
 
-def _mock_forecast(horizon_months: int = 3) -> Dict[str, Any]:
+def _mock_forecast(horizon: str = "weekly_12") -> Dict[str, Any]:
     points = []
-    for idx in range(max(1, min(24, horizon_months))):
-        month = f"2026-{idx+1:02d}"
+    count = 12 if horizon == "weekly_12" else 30
+    for idx in range(count):
         points.append(
             {
-                "month": month,
+                "period": f"p{idx+1}",
                 "income_estimate": 35_000_000,
                 "spend_estimate": 21_000_000,
                 "p10": 10_000_000,
@@ -119,126 +165,222 @@ def _mock_forecast(horizon_months: int = 3) -> Dict[str, Any]:
             }
         )
     return {
-        "forecast_points": points,
-        "monthly_forecast": points,
+        "points": points,
         "confidence_band": {"p10_avg": 10_000_000, "p50_avg": 14_000_000, "p90_avg": 18_000_000},
-        "assumptions": ["Mocked forecast"],
         "trace_id": "trc_mocked01",
-        "model_meta": {"model_version": "mock", "low_history": True},
     }
 
 
-def sql_read_views(user_token: str, range_days: str) -> Dict[str, Any]:
+def spend_analytics(user_token: str, user_id: str, range_days: str = "30d", trace_id: str | None = None) -> Dict[str, Any]:
     if _should_use_local_mocks():
-        return _mock_summary(range_days)
-    try:
-        return _request_json(
-            "GET",
-            "/aggregates/summary",
-            user_token,
-            params={"range": range_days},
-            timeout=10,
-        )
-    except requests.RequestException as exc:
-        raise RuntimeError("Backend call failed: GET /aggregates/summary") from exc
+        return _mock_spend(range_days)
+    return _call_gateway_tool(
+        "spend_analytics_v1",
+        {"user_id": user_id, "range": range_days, "trace_id": trace_id},
+        user_token,
+    )
 
 
-def goals_get_set(user_token: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    if _should_use_local_mocks():
-        return {"status": "mocked", "payload": payload}
-    return _request_json("POST", "/goals", user_token, payload=payload, timeout=10)
-
-
-def notifications_send(user_token: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    if _should_use_local_mocks():
-        return {"status": "mocked", "payload": payload}
-    return _request_json("POST", "/notifications", user_token, payload=payload, timeout=10)
-
-
-def forecast_cashflow(user_token: str, range_days: str = "90d") -> Dict[str, Any]:
-    if _should_use_local_mocks():
-        return _mock_forecast(horizon_months=3)
-    try:
-        return _request_json(
-            "GET",
-            "/forecast/cashflow",
-            user_token,
-            params={"range": range_days},
-            timeout=15,
-        )
-    except requests.RequestException as exc:
-        raise RuntimeError("Backend call failed: GET /forecast/cashflow") from exc
-
-
-def forecast_cashflow_scenario(user_token: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    if _should_use_local_mocks():
-        horizon = int(payload.get("horizon_months", 12))
-        return _mock_forecast(horizon)
-    try:
-        return _request_json("POST", "/forecast/cashflow/scenario", user_token, payload=payload, timeout=20)
-    except requests.RequestException as exc:
-        raise RuntimeError("Backend call failed: POST /forecast/cashflow/scenario") from exc
-
-
-def forecast_runway(user_token: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+def anomaly_signals(user_token: str, user_id: str, lookback_days: int = 90, trace_id: str | None = None) -> Dict[str, Any]:
     if _should_use_local_mocks():
         return {
-            "runway_months": 12,
-            "stress_result": [],
-            "risk_flags": [],
-            "trace_id": payload.get("trace_id", "trc_mocked01"),
+            "flags": ["abnormal_spend"],
+            "abnormal_spend": {"flag": True, "z_score": 2.8},
+            "trace_id": "trc_mocked01",
         }
-    try:
-        return _request_json("POST", "/forecast/runway", user_token, payload=payload, timeout=20)
-    except requests.RequestException as exc:
-        raise RuntimeError("Backend call failed: POST /forecast/runway") from exc
+    return _call_gateway_tool(
+        "anomaly_signals_v1",
+        {"user_id": user_id, "lookback_days": lookback_days, "trace_id": trace_id},
+        user_token,
+    )
+
+
+def cashflow_forecast_tool(
+    user_token: str,
+    user_id: str,
+    horizon: str = "weekly_12",
+    scenario_overrides: Dict[str, Any] | None = None,
+    trace_id: str | None = None,
+) -> Dict[str, Any]:
+    if _should_use_local_mocks():
+        return _mock_forecast(horizon)
+    return _call_gateway_tool(
+        "cashflow_forecast_v1",
+        {
+            "user_id": user_id,
+            "horizon": horizon,
+            "scenario_overrides": scenario_overrides or {},
+            "trace_id": trace_id,
+        },
+        user_token,
+    )
+
+
+def jar_allocation_suggest_tool(
+    user_token: str,
+    user_id: str,
+    monthly_income_override: float | None = None,
+    goal_overrides: list[Dict[str, Any]] | None = None,
+    trace_id: str | None = None,
+) -> Dict[str, Any]:
+    if _should_use_local_mocks():
+        return {
+            "allocations": [
+                {"jar_name": "Bills", "amount": 8_000_000, "ratio": 0.25},
+                {"jar_name": "Emergency", "amount": 6_000_000, "ratio": 0.2},
+            ],
+            "trace_id": "trc_mocked01",
+        }
+    return _call_gateway_tool(
+        "jar_allocation_suggest_v1",
+        {
+            "user_id": user_id,
+            "monthly_income_override": monthly_income_override,
+            "goal_overrides": goal_overrides or [],
+            "trace_id": trace_id,
+        },
+        user_token,
+    )
+
+
+def risk_profile_non_investment_tool(
+    user_token: str,
+    user_id: str,
+    lookback_days: int = 180,
+    trace_id: str | None = None,
+) -> Dict[str, Any]:
+    if _should_use_local_mocks():
+        return {
+            "risk_band": "moderate",
+            "cashflow_volatility": 0.4,
+            "emergency_runway_months": 4,
+            "overspend_propensity": 0.45,
+            "trace_id": "trc_mocked01",
+        }
+    return _call_gateway_tool(
+        "risk_profile_non_investment_v1",
+        {"user_id": user_id, "lookback_days": lookback_days, "trace_id": trace_id},
+        user_token,
+    )
+
+
+def suitability_guard_tool(
+    user_token: str,
+    user_id: str,
+    intent: str,
+    requested_action: str,
+    prompt: str,
+    trace_id: str | None = None,
+) -> Dict[str, Any]:
+    if _should_use_local_mocks():
+        blocked = requested_action.lower() in {"buy", "sell", "execute"}
+        return {
+            "allow": not blocked,
+            "decision": "deny_execution" if blocked else "allow",
+            "required_disclaimer": "Educational guidance only. We do not provide investment advice.",
+            "education_only": "invest" in intent.lower() or "invest" in prompt.lower(),
+            "trace_id": "trc_mocked01",
+        }
+    return _call_gateway_tool(
+        "suitability_guard_v1",
+        {
+            "user_id": user_id,
+            "intent": intent,
+            "requested_action": requested_action,
+            "prompt": prompt,
+            "trace_id": trace_id,
+        },
+        user_token,
+    )
+
+
+# Legacy aliases retained for compatibility.
+def sql_read_views(user_token: str, range_days: str, user_id: str = "demo-user") -> Dict[str, Any]:
+    return spend_analytics(user_token, user_id=user_id, range_days=range_days)
+
+
+def forecast_cashflow(user_token: str, range_days: str = "90d", user_id: str = "demo-user") -> Dict[str, Any]:
+    horizon = "daily_30" if range_days == "30d" else "weekly_12"
+    return cashflow_forecast_tool(user_token, user_id=user_id, horizon=horizon)
+
+
+def forecast_cashflow_scenario(user_token: str, payload: Dict[str, Any], user_id: str = "demo-user") -> Dict[str, Any]:
+    horizon = str(payload.get("horizon") or payload.get("horizon_months") or "weekly_12")
+    if horizon not in {"daily_30", "weekly_12"}:
+        horizon = "weekly_12"
+    return cashflow_forecast_tool(
+        user_token,
+        user_id=user_id,
+        horizon=horizon,
+        scenario_overrides=payload.get("scenario_overrides", {}),
+        trace_id=payload.get("trace_id"),
+    )
+
+
+def forecast_runway(user_token: str, payload: Dict[str, Any], user_id: str = "demo-user") -> Dict[str, Any]:
+    forecast = payload.get("forecast") or {}
+    points = forecast.get("points") or forecast.get("monthly_forecast") or []
+    cash = float(payload.get("cash_buffer") or 0)
+    periods = 0
+    for point in points:
+        periods += 1
+        cash += float(point.get("p50") or 0)
+        if cash < 0:
+            break
+    return {
+        "runway_periods": periods,
+        "risk_flags": ["runway_below_threshold"] if cash < 0 else [],
+        "trace_id": payload.get("trace_id", "trc_mocked01"),
+    }
 
 
 def decision_savings_goal(user_token: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    if _should_use_local_mocks():
-        return {
-            "metrics": {"required_monthly_saving": 8_000_000, "gap_amount": 0},
-            "grade": "A",
-            "reasons": ["Mocked decision"],
-            "guardrails": [],
-            "trace_id": payload.get("trace_id", "trc_mocked01"),
-        }
-    return _request_json("POST", "/decision/savings-goal", user_token, payload=payload, timeout=20)
+    forecast = payload.get("forecast") or {}
+    points = forecast.get("points") or []
+    target = float(payload.get("target_amount") or 0)
+    horizon = max(1, int(payload.get("horizon_months") or 1))
+    projected = sum(max(0.0, float((points[idx].get("p50") if idx < len(points) else 0))) for idx in range(horizon))
+    required = target / horizon
+    feasible = projected >= target
+    return {
+        "metrics": {"required_monthly_saving": required, "projected_positive_cashflow": projected},
+        "grade": "A" if feasible else "C",
+        "reasons": ["Deterministic projection from cashflow_forecast_v1"],
+        "guardrails": [],
+        "trace_id": payload.get("trace_id", "trc_mocked01"),
+    }
 
 
 def decision_house_affordability(user_token: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    if _should_use_local_mocks():
-        return {
-            "metrics": {"monthly_payment": 12_000_000, "DTI": 0.32},
-            "grade": "B",
-            "reasons": ["Mocked house affordability"],
-            "guardrails": [],
-            "trace_id": payload.get("trace_id", "trc_mocked01"),
-        }
-    return _request_json("POST", "/decision/house-affordability", user_token, payload=payload, timeout=20)
+    monthly_income = float(payload.get("monthly_income") or 0)
+    monthly_payment = float(payload.get("house_price") or 0) / max(1, int(payload.get("loan_years") or 1) * 12)
+    dti = monthly_payment / monthly_income if monthly_income > 0 else 1.0
+    return {
+        "metrics": {"monthly_payment": monthly_payment, "DTI": dti},
+        "grade": "A" if dti < 0.35 else ("B" if dti < 0.45 else "C"),
+        "reasons": ["Approximation for compatibility path."],
+        "guardrails": [],
+        "trace_id": payload.get("trace_id", "trc_mocked01"),
+    }
 
 
 def decision_investment_capacity(user_token: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    if _should_use_local_mocks():
-        return {
-            "metrics": {"investable_low": 2_000_000, "investable_high": 3_500_000},
-            "grade": "B",
-            "reasons": ["Mocked investment capacity"],
-            "guardrails": ["education_only=true"],
-            "trace_id": payload.get("trace_id", "trc_mocked01"),
-            "education_only": True,
-        }
-    return _request_json("POST", "/decision/investment-capacity", user_token, payload=payload, timeout=20)
+    return {
+        "metrics": {"investable_low": 0, "investable_high": 0},
+        "grade": "N/A",
+        "reasons": ["Use suitability_guard_v1 + risk_profile_non_investment_v1 instead."],
+        "guardrails": ["education_only=true"],
+        "trace_id": payload.get("trace_id", "trc_mocked01"),
+        "education_only": True,
+    }
 
 
 def decision_what_if(user_token: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    if _should_use_local_mocks():
-        return {
-            "scenario_comparison": [{"name": "base", "total_net_p50": 1}],
-            "best_variant_by_goal": "base",
-            "trace_id": payload.get("trace_id", "trc_mocked01"),
-        }
-    return _request_json("POST", "/decision/what-if", user_token, payload=payload, timeout=20)
+    return {
+        "scenario_comparison": [],
+        "best_variant_by_goal": "base",
+        "trace_id": payload.get("trace_id", "trc_mocked01"),
+    }
 
 
 def _parse_kb_content(content: Any) -> Dict[str, Any]:
@@ -272,25 +414,12 @@ def _parse_kb_content(content: Any) -> Dict[str, Any]:
 
 
 def _resolve_kb_tool_name(user_token: str) -> str:
-    global _resolved_kb_tool_name
     if AGENTCORE_GATEWAY_TOOL_NAME:
         return AGENTCORE_GATEWAY_TOOL_NAME
-    if _resolved_kb_tool_name:
-        return _resolved_kb_tool_name
     try:
-        data = _gateway_jsonrpc(
-            {"jsonrpc": "2.0", "id": "tools-1", "method": "tools/list"},
-            user_token,
-        )
-        tools = (data.get("result") or {}).get("tools", [])
-        for tool in tools:
-            name = tool.get("name", "")
-            if name == "retrieve_from_aws_kb" or name.endswith("___retrieve_from_aws_kb"):
-                _resolved_kb_tool_name = name
-                return name
-    except requests.RequestException:
-        pass
-    return "retrieve_from_aws_kb"
+        return _resolve_tool_name("retrieve_from_aws_kb", user_token)
+    except Exception:
+        return "retrieve_from_aws_kb"
 
 
 def kb_retrieve(query: str, filters: Dict[str, str], user_token: str = "") -> Dict[str, Any]:
@@ -314,8 +443,20 @@ def kb_retrieve(query: str, filters: Dict[str, str], user_token: str = "") -> Di
         parsed = _parse_kb_content(content)
         parsed["filters"] = filters
         return parsed
-    except requests.RequestException as exc:
+    except Exception as exc:
         return {"matches": [], "note": f"Gateway call failed: {exc}"}
+
+
+def goals_get_set(user_token: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    if _should_use_local_mocks():
+        return {"status": "mocked", "payload": payload}
+    return _request_json("POST", "/goals", user_token, payload=payload, timeout=10)
+
+
+def notifications_send(user_token: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    if _should_use_local_mocks():
+        return {"status": "mocked", "payload": payload}
+    return _request_json("POST", "/notifications", user_token, payload=payload, timeout=10)
 
 
 def code_interpreter_run(expression: str) -> Dict[str, Any]:

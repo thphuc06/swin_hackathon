@@ -6,12 +6,11 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from app.services.auth import current_user
-from app.services.financial_tools import (
-    build_txn_agg_daily,
+from app.services.finance import (
+    cashflow_forecast,
     evaluate_house_affordability,
     evaluate_investment_capacity,
     evaluate_savings_goal,
-    forecast_cashflow_core,
     simulate_what_if,
 )
 from app.services.store import store
@@ -64,14 +63,26 @@ class WhatIfRequest(BaseModel):
 
 
 def _default_forecast(user_id: str, trace_id: str | None = None) -> Dict[str, Any]:
-    txns = [tx for tx in store.transactions if tx.get("user_id") == user_id]
-    daily = build_txn_agg_daily(txns)
-    return forecast_cashflow_core(
-        txn_agg_daily=daily,
-        seasonality=True,
-        horizon_months=12,
+    forecast = cashflow_forecast(
+        auth_user_id=user_id,
+        user_id=user_id,
+        horizon="weekly_12",
         trace_id=trace_id,
     )
+    weekly_points = forecast.get("points", [])
+    monthly_points = []
+    for idx, point in enumerate(weekly_points[:12]):
+        monthly_points.append(
+            {
+                "month": f"m{idx+1}",
+                "income_estimate": point.get("income_estimate", 0),
+                "spend_estimate": point.get("spend_estimate", 0),
+                "p10": point.get("p10", 0),
+                "p50": point.get("p50", 0),
+                "p90": point.get("p90", 0),
+            }
+        )
+    return {"monthly_forecast": monthly_points, "trace_id": forecast.get("trace_id")}
 
 
 @router.post("/savings-goal", response_model=DecisionResponse)
@@ -142,9 +153,7 @@ def decision_investment(payload: InvestmentCapacityRequest, user=Depends(current
 @router.post("/what-if")
 def decision_what_if(payload: WhatIfRequest, user=Depends(current_user)):
     base_scenario = dict(payload.base_scenario)
-    if "txn_agg_daily" not in base_scenario:
-        txns = [tx for tx in store.transactions if tx.get("user_id") == user.get("sub")]
-        base_scenario["txn_agg_daily"] = build_txn_agg_daily(txns)
+    base_scenario.setdefault("txn_agg_daily", [])
     result = simulate_what_if(
         base_scenario=base_scenario,
         variants=payload.variants,

@@ -149,3 +149,67 @@ SSE stream from AgentCore Runtime or local AgentCore app.
 
 ### GET /audit/{trace_id}
 Returns audit event and tool chain for the trace ID.
+
+## MCP (Financial Tools)
+
+### GET /mcp
+Health text endpoint for MCP target checks.
+
+### POST /mcp
+JSON-RPC endpoint used by AgentCore Gateway target.
+
+### Example: initialize
+```json
+{ "jsonrpc": "2.0", "id": "init-1", "method": "initialize" }
+```
+
+### Example: tools/list
+```json
+{ "jsonrpc": "2.0", "id": "tools-1", "method": "tools/list" }
+```
+
+### Example: tools/call
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "call-1",
+  "method": "tools/call",
+  "params": {
+    "name": "spend_analytics_v1",
+    "arguments": {
+      "user_id": "64481438-5011-7008-00f8-03e42cc06593",
+      "range": "30d"
+    }
+  }
+}
+```
+
+### Financial MCP tool names
+- `spend_analytics_v1`
+- `anomaly_signals_v1`
+- `cashflow_forecast_v1`
+- `jar_allocation_suggest_v1`
+- `risk_profile_non_investment_v1`
+- `suitability_guard_v1`
+
+## Single User Seeding Utility
+
+The backend includes an internal CLI utility for deterministic single-user advisory seeding:
+
+```bash
+python scripts/seed_single_user_advisory.py \
+  --sparkov-train C:/data/fraudTrain.csv \
+  --sparkov-test C:/data/fraudTest.csv \
+  --supabase-url https://<project-ref>.supabase.co \
+  --supabase-service-key <service-role-key> \
+  --seed-user-id <uuid-or-cognito-sub> \
+  --months 12 \
+  --target-debit-rows 5000 \
+  --fx-rate 25000 \
+  --currency VND \
+  --seed 20260207
+```
+
+Generated artifacts:
+- `backend/tmp/seed_manifest_single_user.json`
+- `backend/tmp/seed_validation_single_user.json`

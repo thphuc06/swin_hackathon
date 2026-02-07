@@ -3,16 +3,15 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.services.auth import current_user
+from app.services.finance import spend_analytics
 
 router = APIRouter(prefix="/aggregates", tags=["aggregates"])
 
 
 @router.get("/summary")
 def summary(range: str = "30d", user=Depends(current_user)):
-    return {
-        "range": range,
-        "user_id": user.get("sub"),
-        "total_spend": 14200000,
-        "total_income": 38200000,
-        "largest_txn": {"merchant": "Techcombank", "amount": 5500000},
-    }
+    return spend_analytics(
+        auth_user_id=user.get("sub", ""),
+        user_id=user.get("sub", ""),
+        range_value=range,
+    )
