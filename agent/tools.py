@@ -2,10 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import uuid
 from typing import Any, Dict
 from urllib.parse import urlparse
 
 import requests
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from config import (
     AGENTCORE_GATEWAY_ENDPOINT,
@@ -15,7 +23,12 @@ from config import (
     USE_LOCAL_MOCKS,
 )
 
+logger = logging.getLogger(__name__)
+
+# Tool registry cache (initialized at startup)
 _resolved_tool_names: Dict[str, str] = {}
+_tool_schemas: Dict[str, Dict[str, Any]] = {}  # Maps tool name -> full tool definition
+_registry_initialized: bool = False
 
 
 def _hash_payload(payload: Dict[str, Any]) -> str:
@@ -31,7 +44,14 @@ def _is_local_backend() -> bool:
 
 
 def _should_use_local_mocks() -> bool:
-    return USE_LOCAL_MOCKS and (not AGENTCORE_GATEWAY_ENDPOINT or _is_local_backend())
+    # Strict guard: mock data is only allowed for offline localhost development.
+    if not USE_LOCAL_MOCKS:
+        return False
+    if not _is_local_backend():
+        return False
+    if AGENTCORE_GATEWAY_ENDPOINT.strip():
+        return False
+    return True
 
 
 def _auth_headers(token: str) -> Dict[str, str]:
@@ -52,21 +72,50 @@ def _gateway_endpoint() -> str:
     )
 
 
-def _gateway_jsonrpc(payload: Dict[str, Any], user_token: str) -> Dict[str, Any]:
+@retry(
+    retry=retry_if_exception_type((requests.exceptions.RequestException, requests.exceptions.Timeout)),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=4),
+    reraise=True,
+)
+def _gateway_jsonrpc(payload: Dict[str, Any], user_token: str, call_id: str | None = None) -> Dict[str, Any]:
+    """Call AgentCore Gateway with retry logic for transient errors.
+    
+    Retries up to 3 times with exponential backoff (1s, 2s, 4s) for:
+    - Network errors (ConnectionError, Timeout)
+    - 5xx server errors
+    
+    Does NOT retry:
+    - 4xx validation errors
+    - Business logic errors
+    """
     endpoint = _gateway_endpoint()
     if not endpoint:
         raise RuntimeError("AGENTCORE_GATEWAY_ENDPOINT not configured")
-    response = requests.post(
-        endpoint,
-        json=payload,
-        headers=_auth_headers(user_token),
-        timeout=25,
-    )
-    response.raise_for_status()
-    data = response.json()
-    if "error" in data:
-        raise RuntimeError(f"Gateway tool error: {data['error']}")
-    return data
+    
+    log_ctx = {"call_id": call_id or "unknown", "method": payload.get("method")}
+    
+    try:
+        response = requests.post(
+            endpoint,
+            json=payload,
+            headers=_auth_headers(user_token),
+            timeout=25,
+        )
+        response.raise_for_status()
+        data = response.json()
+        if "error" in data:
+            logger.warning("Gateway error: %s call_id=%s", data["error"], call_id)
+            raise RuntimeError(f"Gateway tool error: {data['error']}")
+        return data
+    except requests.exceptions.HTTPError as exc:
+        # Don't retry 4xx errors (client errors)
+        if exc.response is not None and 400 <= exc.response.status_code < 500:
+            logger.warning("Gateway client error: %s call_id=%s", exc, call_id)
+            raise
+        # Retry 5xx errors
+        logger.warning("Gateway server error, will retry: %s call_id=%s", exc, call_id)
+        raise
 
 
 def _request_json(
@@ -110,30 +159,196 @@ def _parse_tool_result_content(content: Any) -> Dict[str, Any]:
     return {}
 
 
+def _drop_none(value: Any) -> Any:
+    if isinstance(value, dict):
+        cleaned: Dict[str, Any] = {}
+        for key, item in value.items():
+            if item is None:
+                continue
+            cleaned[key] = _drop_none(item)
+        return cleaned
+    if isinstance(value, list):
+        return [_drop_none(item) for item in value if item is not None]
+    return value
+
+
+def initialize_tool_registry(user_token: str) -> Dict[str, Any]:
+    """Initialize tool registry at startup by calling tools/list once.
+    
+    Populates:
+    - _resolved_tool_names: Maps base_name -> full_name
+    - _tool_schemas: Maps base_name -> full tool definition (with inputSchema)
+    
+    Returns:
+        dict with 'count' and 'tools' for logging/monitoring
+    """
+    global _registry_initialized, _resolved_tool_names, _tool_schemas
+    
+    if _registry_initialized:
+        return {"count": len(_resolved_tool_names), "tools": list(_resolved_tool_names.keys())}
+    
+    try:
+        data = _gateway_jsonrpc(
+            {"jsonrpc": "2.0", "id": "tools-init", "method": "tools/list"},
+            user_token,
+            call_id="registry-init",
+        )
+        tools = (data.get("result") or {}).get("tools", [])
+        
+        for tool in tools:
+            full_name = str(tool.get("name") or "")
+            # Extract base name (remove server prefix if present)
+            base_name = full_name.split("___")[-1] if "___" in full_name else full_name
+            
+            _resolved_tool_names[base_name] = full_name
+            _tool_schemas[base_name] = tool
+        
+        _registry_initialized = True
+        logger.info(
+            "Tool registry initialized: %d tools loaded - %s",
+            len(_resolved_tool_names),
+            ", ".join(_resolved_tool_names.keys()),
+        )
+        
+        return {"count": len(_resolved_tool_names), "tools": list(_resolved_tool_names.keys())}
+    
+    except Exception as exc:
+        logger.error("Failed to initialize tool registry: %s", exc)
+        # Don't fail startup - fall back to lazy loading
+        return {"count": 0, "tools": [], "error": str(exc)}
+
+
 def _resolve_tool_name(base_name: str, user_token: str) -> str:
+    """Resolve tool name from cache (populated at startup).
+    
+    Falls back to lazy loading if registry not initialized.
+    """
     if base_name in _resolved_tool_names:
         return _resolved_tool_names[base_name]
-
-    data = _gateway_jsonrpc({"jsonrpc": "2.0", "id": "tools-1", "method": "tools/list"}, user_token)
+    
+    # Fallback: lazy load if not in cache (shouldn't happen after startup)
+    logger.warning("Tool %s not in registry, lazy loading (this should not happen)", base_name)
+    
+    data = _gateway_jsonrpc(
+        {"jsonrpc": "2.0", "id": "tools-lazy", "method": "tools/list"},
+        user_token,
+        call_id=f"lazy-{base_name}",
+    )
     tools = (data.get("result") or {}).get("tools", [])
     for tool in tools:
         name = str(tool.get("name") or "")
         if name == base_name or name.endswith(f"___{base_name}"):
             _resolved_tool_names[base_name] = name
+            _tool_schemas[base_name] = tool
             return name
     raise RuntimeError(f"Tool {base_name} not found in AgentCore Gateway tools/list")
 
 
-def _call_gateway_tool(base_name: str, arguments: Dict[str, Any], user_token: str) -> Dict[str, Any]:
+def _validate_tool_arguments(base_name: str, arguments: Dict[str, Any]) -> tuple[bool, list[str]]:
+    """Validate tool arguments against cached inputSchema (client-side validation).
+    
+    Returns:
+        (is_valid, errors) tuple
+    """
+    if base_name not in _tool_schemas:
+        # No schema available, skip validation
+        return True, []
+    
+    tool_def = _tool_schemas[base_name]
+    input_schema = tool_def.get("inputSchema")
+    
+    if not input_schema or not isinstance(input_schema, dict):
+        # No schema to validate against
+        return True, []
+    
+    try:
+        import jsonschema
+        jsonschema.validate(instance=arguments, schema=input_schema)
+        return True, []
+    except jsonschema.ValidationError as exc:
+        return False, [str(exc.message)]
+    except jsonschema.SchemaError as exc:
+        logger.warning("Invalid schema for tool %s: %s", base_name, exc)
+        return True, []  # Skip validation if schema itself is invalid
+    except Exception as exc:
+        logger.warning("Validation error for tool %s: %s", base_name, exc)
+        return True, []  # Skip validation on unexpected errors
+
+
+def _call_gateway_tool(
+    base_name: str,
+    arguments: Dict[str, Any],
+    user_token: str,
+    *,
+    call_id: str | None = None,
+    trace_id: str | None = None,
+) -> Dict[str, Any]:
+    """Call MCP tool via AgentCore Gateway with validation and retry logic.
+    
+    Args:
+        base_name: Tool name (e.g., 'anomaly_signals_v1')
+        arguments: Tool arguments to validate and send
+        user_token: Authorization token
+        call_id: Unique call ID for this invocation (for correlation)
+        trace_id: Request-level trace ID (for request correlation)
+    
+    Returns:
+        Parsed tool output as dict
+    """
+    call_id = call_id or str(uuid.uuid4())
+    
+    # Client-side JSON Schema validation (fail fast)
+    is_valid, validation_errors = _validate_tool_arguments(base_name, arguments)
+    if not is_valid:
+        error_msg = f"Invalid arguments for {base_name}: {'; '.join(validation_errors)}"
+        logger.warning(
+            "Client-side validation failed: tool=%s call_id=%s trace_id=%s errors=%s",
+            base_name,
+            call_id,
+            trace_id,
+            validation_errors,
+        )
+        raise ValueError(error_msg)
+    
     resolved_name = _resolve_tool_name(base_name, user_token)
+    sanitized_arguments = _drop_none(arguments)
+    
     payload = {
         "jsonrpc": "2.0",
-        "id": f"tool-{base_name}",
+        "id": call_id,
         "method": "tools/call",
-        "params": {"name": resolved_name, "arguments": arguments},
+        "params": {"name": resolved_name, "arguments": sanitized_arguments},
     }
-    data = _gateway_jsonrpc(payload, user_token)
-    content = (data.get("result") or {}).get("content", [])
+    
+    logger.info(
+        "Calling tool: %s call_id=%s trace_id=%s",
+        base_name,
+        call_id,
+        trace_id,
+    )
+    
+    data = _gateway_jsonrpc(payload, user_token, call_id=call_id)
+    result = data.get("result") or {}
+    
+    if bool(result.get("isError")):
+        content = result.get("content", [])
+        detail = ""
+        if isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict) and isinstance(item.get("text"), str):
+                    detail = item["text"].strip()
+                    if detail:
+                        break
+        logger.warning(
+            "Tool error: tool=%s call_id=%s trace_id=%s error=%s",
+            base_name,
+            call_id,
+            trace_id,
+            detail,
+        )
+        raise RuntimeError(f"Gateway tool error for {base_name}: {detail or 'unknown error'}")
+    
+    content = result.get("content", [])
     return _parse_tool_result_content(content)
 
 
@@ -174,10 +389,13 @@ def _mock_forecast(horizon: str = "weekly_12") -> Dict[str, Any]:
 def spend_analytics(user_token: str, user_id: str, range_days: str = "30d", trace_id: str | None = None) -> Dict[str, Any]:
     if _should_use_local_mocks():
         return _mock_spend(range_days)
+    call_id = str(uuid.uuid4())
     return _call_gateway_tool(
         "spend_analytics_v1",
         {"user_id": user_id, "range": range_days, "trace_id": trace_id},
         user_token,
+        call_id=call_id,
+        trace_id=trace_id,
     )
 
 
@@ -188,10 +406,13 @@ def anomaly_signals(user_token: str, user_id: str, lookback_days: int = 90, trac
             "abnormal_spend": {"flag": True, "z_score": 2.8},
             "trace_id": "trc_mocked01",
         }
+    call_id = str(uuid.uuid4())
     return _call_gateway_tool(
         "anomaly_signals_v1",
         {"user_id": user_id, "lookback_days": lookback_days, "trace_id": trace_id},
         user_token,
+        call_id=call_id,
+        trace_id=trace_id,
     )
 
 
@@ -204,6 +425,7 @@ def cashflow_forecast_tool(
 ) -> Dict[str, Any]:
     if _should_use_local_mocks():
         return _mock_forecast(horizon)
+    call_id = str(uuid.uuid4())
     return _call_gateway_tool(
         "cashflow_forecast_v1",
         {
@@ -213,6 +435,8 @@ def cashflow_forecast_tool(
             "trace_id": trace_id,
         },
         user_token,
+        call_id=call_id,
+        trace_id=trace_id,
     )
 
 
@@ -231,6 +455,7 @@ def jar_allocation_suggest_tool(
             ],
             "trace_id": "trc_mocked01",
         }
+    call_id = str(uuid.uuid4())
     return _call_gateway_tool(
         "jar_allocation_suggest_v1",
         {
@@ -240,6 +465,8 @@ def jar_allocation_suggest_tool(
             "trace_id": trace_id,
         },
         user_token,
+        call_id=call_id,
+        trace_id=trace_id,
     )
 
 
@@ -257,10 +484,13 @@ def risk_profile_non_investment_tool(
             "overspend_propensity": 0.45,
             "trace_id": "trc_mocked01",
         }
+    call_id = str(uuid.uuid4())
     return _call_gateway_tool(
         "risk_profile_non_investment_v1",
         {"user_id": user_id, "lookback_days": lookback_days, "trace_id": trace_id},
         user_token,
+        call_id=call_id,
+        trace_id=trace_id,
     )
 
 
@@ -273,14 +503,37 @@ def suitability_guard_tool(
     trace_id: str | None = None,
 ) -> Dict[str, Any]:
     if _should_use_local_mocks():
-        blocked = requested_action.lower() in {"buy", "sell", "execute"}
+        action = (requested_action or "").strip().lower()
+        blocked_execution = action in {"buy", "sell", "execute", "trade", "order"}
+        blocked_recommendation = action in {"recommend_buy", "recommend_sell", "recommend_trade"}
+        blocked = blocked_execution or blocked_recommendation
+        decision = "allow"
+        refusal_message = ""
+        if blocked_execution:
+            decision = "deny_execution"
+            refusal_message = "I cannot execute buy/sell actions. I can provide educational guidance only."
+        elif blocked_recommendation:
+            decision = "deny_recommendation"
+            refusal_message = (
+                "I cannot provide buy/sell recommendations. "
+                "I can help with cashflow, budgeting, and non-investment risk planning."
+            )
         return {
             "allow": not blocked,
-            "decision": "deny_execution" if blocked else "allow",
+            "decision": decision,
+            "reason_codes": (
+                ["execution_blocked", "education_only_policy"]
+                if blocked_execution
+                else ["investment_recommendation_blocked", "education_only_policy"]
+                if blocked_recommendation
+                else ["non_investment_intent"]
+            ),
+            "refusal_message": refusal_message,
             "required_disclaimer": "Educational guidance only. We do not provide investment advice.",
             "education_only": "invest" in intent.lower() or "invest" in prompt.lower(),
             "trace_id": "trc_mocked01",
         }
+    call_id = str(uuid.uuid4())
     return _call_gateway_tool(
         "suitability_guard_v1",
         {
@@ -291,6 +544,8 @@ def suitability_guard_tool(
             "trace_id": trace_id,
         },
         user_token,
+        call_id=call_id,
+        trace_id=trace_id,
     )
 
 
@@ -310,6 +565,7 @@ def recurring_cashflow_detect_tool(
             "drift_alerts": [],
             "trace_id": "trc_mocked01",
         }
+    call_id = str(uuid.uuid4())
     return _call_gateway_tool(
         "recurring_cashflow_detect_v1",
         {
@@ -320,6 +576,8 @@ def recurring_cashflow_detect_tool(
             "trace_id": trace_id,
         },
         user_token,
+        call_id=call_id,
+        trace_id=trace_id,
     )
 
 
@@ -340,6 +598,7 @@ def goal_feasibility_tool(
             "grade": "A",
             "trace_id": "trc_mocked01",
         }
+    call_id = str(uuid.uuid4())
     return _call_gateway_tool(
         "goal_feasibility_v1",
         {
@@ -351,6 +610,8 @@ def goal_feasibility_tool(
             "trace_id": trace_id,
         },
         user_token,
+        call_id=call_id,
+        trace_id=trace_id,
     )
 
 
@@ -374,6 +635,7 @@ def what_if_scenario_tool(
             "base_total_net_p50": 40_000_000,
             "trace_id": "trc_mocked01",
         }
+    call_id = str(uuid.uuid4())
     return _call_gateway_tool(
         "what_if_scenario_v1",
         {
@@ -382,10 +644,12 @@ def what_if_scenario_tool(
             "seasonality": seasonality,
             "goal": goal,
             "base_scenario_overrides": base_scenario_overrides or {},
-            "variants": variants,
+            "variants": variants or [],
             "trace_id": trace_id,
         },
         user_token,
+        call_id=call_id,
+        trace_id=trace_id,
     )
 
 
@@ -523,28 +787,39 @@ def _resolve_kb_tool_name(user_token: str) -> str:
         return "retrieve_from_aws_kb"
 
 
-def kb_retrieve(query: str, filters: Dict[str, str], user_token: str = "") -> Dict[str, Any]:
+def kb_retrieve(query: str, filters: Dict[str, str], user_token: str = "", trace_id: str | None = None) -> Dict[str, Any]:
     if not BEDROCK_KB_ID:
         return {"matches": [], "note": "KB not configured"}
     if not AGENTCORE_GATEWAY_ENDPOINT:
         return {"matches": [], "note": "Gateway not configured"}
+    
+    call_id = str(uuid.uuid4())
     tool_name = _resolve_kb_tool_name(user_token)
     payload = {
         "jsonrpc": "2.0",
-        "id": "kb-1",
+        "id": call_id,
         "method": "tools/call",
         "params": {
             "name": tool_name,
             "arguments": {"query": query, "knowledgeBaseId": BEDROCK_KB_ID, "n": 3},
         },
     }
+    
+    logger.info(
+        "KB retrieve: query=%s call_id=%s trace_id=%s",
+        query[:50] + "..." if len(query) > 50 else query,
+        call_id,
+        trace_id,
+    )
+    
     try:
-        data = _gateway_jsonrpc(payload, user_token)
+        data = _gateway_jsonrpc(payload, user_token, call_id=call_id)
         content = (data.get("result") or {}).get("content", [])
         parsed = _parse_kb_content(content)
         parsed["filters"] = filters
         return parsed
     except Exception as exc:
+        logger.warning("KB retrieve failed: call_id=%s trace_id=%s error=%s", call_id, trace_id, exc)
         return {"matches": [], "note": f"Gateway call failed: {exc}"}
 
 

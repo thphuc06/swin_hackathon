@@ -1,0 +1,665 @@
+from __future__ import annotations
+
+from typing import Any, Dict
+
+from .contracts import EvidencePackV1, FactV1, LanguageCode
+from .normalize import fmt_money, fmt_pct, fmt_signed_money, safe_float
+
+
+def _sanitize_timeframe(raw: Any, default: str) -> str:
+    text = str(raw or "").strip().lower()
+    if not text:
+        return default
+    normalized = "".join(ch for ch in text if ch.isalnum() or ch in {"_", "-"})
+    return normalized or default
+
+
+def _scenario_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    if "scenario_comparison" in raw or "best_variant_by_goal" in raw:
+        return raw
+    for key in ["payload", "result", "data", "output"]:
+        nested = raw.get(key)
+        if isinstance(nested, dict) and ("scenario_comparison" in nested or "best_variant_by_goal" in nested):
+            return nested
+    return raw
+
+
+def _add_fact(
+    facts: list[FactV1],
+    *,
+    fact_id: str,
+    label: str,
+    value: Any,
+    value_text: str,
+    unit: str = "",
+    timeframe: str = "",
+    source_tool: str,
+    source_path: str,
+) -> None:
+    facts.append(
+        FactV1(
+            fact_id=fact_id,
+            label=label,
+            value=value,
+            value_text=value_text,
+            unit=unit,
+            timeframe=timeframe,
+            source_tool=source_tool,
+            source_path=source_path,
+        )
+    )
+
+
+def _avg(values: list[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def _extract_spend_facts(tool_outputs: Dict[str, Any], facts: list[FactV1]) -> None:
+    summary = tool_outputs.get("spend_analytics_v1")
+    if not isinstance(summary, dict):
+        return
+    timeframe = _sanitize_timeframe(summary.get("range"), "30d")
+    total_income = safe_float(summary.get("total_income"))
+    total_spend = safe_float(summary.get("total_spend"))
+    net_cashflow = safe_float(summary.get("net_cashflow"), total_income - total_spend)
+    _add_fact(
+        facts,
+        fact_id=f"spend.total_income.{timeframe}",
+        label="Tổng thu nhập",
+        value=total_income,
+        value_text=fmt_money(total_income),
+        unit="VND",
+        timeframe=timeframe,
+        source_tool="spend_analytics_v1",
+        source_path="total_income",
+    )
+    _add_fact(
+        facts,
+        fact_id=f"spend.total_spend.{timeframe}",
+        label="Tổng chi tiêu",
+        value=total_spend,
+        value_text=fmt_money(total_spend),
+        unit="VND",
+        timeframe=timeframe,
+        source_tool="spend_analytics_v1",
+        source_path="total_spend",
+    )
+    _add_fact(
+        facts,
+        fact_id=f"spend.net_cashflow.{timeframe}",
+        label="Dòng tiền ròng",
+        value=net_cashflow,
+        value_text=fmt_signed_money(net_cashflow),
+        unit="VND",
+        timeframe=timeframe,
+        source_tool="spend_analytics_v1",
+        source_path="net_cashflow",
+    )
+
+
+def _extract_forecast_facts(tool_outputs: Dict[str, Any], facts: list[FactV1]) -> None:
+    forecast = tool_outputs.get("cashflow_forecast_v1")
+    if not isinstance(forecast, dict):
+        return
+    points = forecast.get("points")
+    if not isinstance(points, list):
+        points = []
+    income_values = [safe_float(point.get("income_estimate")) for point in points if isinstance(point, dict)]
+    spend_values = [safe_float(point.get("spend_estimate")) for point in points if isinstance(point, dict)]
+    net_values = [safe_float(point.get("p50")) for point in points if isinstance(point, dict)]
+    if not points:
+        return
+    _add_fact(
+        facts,
+        fact_id="forecast.avg_income.weekly_12",
+        label="Thu nhập dự báo trung bình/kỳ",
+        value=_avg(income_values),
+        value_text=fmt_money(_avg(income_values)),
+        unit="VND",
+        timeframe="weekly_12",
+        source_tool="cashflow_forecast_v1",
+        source_path="points[].income_estimate",
+    )
+    _add_fact(
+        facts,
+        fact_id="forecast.avg_spend.weekly_12",
+        label="Chi tiêu dự báo trung bình/kỳ",
+        value=_avg(spend_values),
+        value_text=fmt_money(_avg(spend_values)),
+        unit="VND",
+        timeframe="weekly_12",
+        source_tool="cashflow_forecast_v1",
+        source_path="points[].spend_estimate",
+    )
+    _add_fact(
+        facts,
+        fact_id="forecast.avg_net_p50.weekly_12",
+        label="Net P50 dự báo trung bình/kỳ",
+        value=_avg(net_values),
+        value_text=fmt_signed_money(_avg(net_values)),
+        unit="VND",
+        timeframe="weekly_12",
+        source_tool="cashflow_forecast_v1",
+        source_path="points[].p50",
+    )
+
+
+def _extract_risk_facts(tool_outputs: Dict[str, Any], facts: list[FactV1]) -> None:
+    risk = tool_outputs.get("risk_profile_non_investment_v1")
+    if not isinstance(risk, dict):
+        return
+    risk_band = str(risk.get("risk_band") or "unknown")
+    runway = safe_float(risk.get("emergency_runway_months"))
+    volatility = safe_float(risk.get("cashflow_volatility"))
+    overspend = safe_float(risk.get("overspend_propensity"))
+    timeframe = "180d"
+    _add_fact(
+        facts,
+        fact_id=f"risk.risk_band.{timeframe}",
+        label="Mức rủi ro",
+        value=risk_band,
+        value_text=risk_band,
+        timeframe=timeframe,
+        source_tool="risk_profile_non_investment_v1",
+        source_path="risk_band",
+    )
+    _add_fact(
+        facts,
+        fact_id=f"risk.runway_months.{timeframe}",
+        label="Runway dự phòng",
+        value=runway,
+        value_text=f"{runway:.2f}",
+        unit="months",
+        timeframe=timeframe,
+        source_tool="risk_profile_non_investment_v1",
+        source_path="emergency_runway_months",
+    )
+    _add_fact(
+        facts,
+        fact_id=f"risk.cashflow_volatility.{timeframe}",
+        label="Biến động dòng tiền",
+        value=volatility,
+        value_text=fmt_pct(volatility),
+        unit="pct",
+        timeframe=timeframe,
+        source_tool="risk_profile_non_investment_v1",
+        source_path="cashflow_volatility",
+    )
+    _add_fact(
+        facts,
+        fact_id=f"risk.overspend_propensity.{timeframe}",
+        label="Xác suất vượt chi",
+        value=overspend,
+        value_text=fmt_pct(overspend),
+        unit="pct",
+        timeframe=timeframe,
+        source_tool="risk_profile_non_investment_v1",
+        source_path="overspend_propensity",
+    )
+
+
+def _extract_anomaly_facts(tool_outputs: Dict[str, Any], facts: list[FactV1]) -> None:
+    anomaly = tool_outputs.get("anomaly_signals_v1")
+    if not isinstance(anomaly, dict):
+        return
+    flags = anomaly.get("flags")
+    if not isinstance(flags, list):
+        flags = []
+    _add_fact(
+        facts,
+        fact_id="anomaly.flags_count.90d",
+        label="Số cảnh báo bất thường",
+        value=len(flags),
+        value_text=str(len(flags)),
+        timeframe="90d",
+        source_tool="anomaly_signals_v1",
+        source_path="flags",
+    )
+    if flags:
+        _add_fact(
+            facts,
+            fact_id="anomaly.top_flag.90d",
+            label="Cảnh báo chính",
+            value=str(flags[0]),
+            value_text=str(flags[0]),
+            timeframe="90d",
+            source_tool="anomaly_signals_v1",
+            source_path="flags[0]",
+        )
+
+
+def _extract_goal_facts(tool_outputs: Dict[str, Any], facts: list[FactV1]) -> None:
+    goal = tool_outputs.get("goal_feasibility_v1")
+    if not isinstance(goal, dict):
+        return
+    target_amount = safe_float(goal.get("target_amount"))
+    horizon_months = int(safe_float(goal.get("horizon_months")))
+    required_monthly = safe_float(goal.get("required_monthly_saving"))
+    feasible = bool(goal.get("feasible"))
+    gap_amount = safe_float(goal.get("gap_amount"))
+
+    if target_amount > 0:
+        _add_fact(
+            facts,
+            fact_id="goal.target_amount",
+            label="Mục tiêu tiết kiệm",
+            value=target_amount,
+            value_text=fmt_money(target_amount),
+            unit="VND",
+            timeframe=f"{max(horizon_months, 0)}m",
+            source_tool="goal_feasibility_v1",
+            source_path="target_amount",
+        )
+    if horizon_months > 0:
+        _add_fact(
+            facts,
+            fact_id="goal.horizon_months",
+            label="Kỳ hạn mục tiêu",
+            value=horizon_months,
+            value_text=str(horizon_months),
+            unit="months",
+            timeframe=f"{horizon_months}m",
+            source_tool="goal_feasibility_v1",
+            source_path="horizon_months",
+        )
+    if required_monthly > 0:
+        _add_fact(
+            facts,
+            fact_id="goal.required_monthly_saving",
+            label="Tiết kiệm tối thiểu mỗi tháng",
+            value=required_monthly,
+            value_text=fmt_money(required_monthly),
+            unit="VND",
+            source_tool="goal_feasibility_v1",
+            source_path="required_monthly_saving",
+        )
+    _add_fact(
+        facts,
+        fact_id="goal.feasible",
+        label="Tính khả thi mục tiêu",
+        value=feasible,
+        value_text="khả thi" if feasible else "chưa khả thi",
+        source_tool="goal_feasibility_v1",
+        source_path="feasible",
+    )
+    if gap_amount > 0:
+        _add_fact(
+            facts,
+            fact_id="goal.gap_amount",
+            label="Khoảng thiếu so với mục tiêu",
+            value=gap_amount,
+            value_text=fmt_money(gap_amount),
+            unit="VND",
+            source_tool="goal_feasibility_v1",
+            source_path="gap_amount",
+        )
+
+
+def _extract_recurring_facts(tool_outputs: Dict[str, Any], facts: list[FactV1]) -> None:
+    recurring = tool_outputs.get("recurring_cashflow_detect_v1")
+    if not isinstance(recurring, dict):
+        return
+    fixed_cost_ratio = safe_float(recurring.get("fixed_cost_ratio"))
+    if fixed_cost_ratio <= 0:
+        return
+    _add_fact(
+        facts,
+        fact_id="recurring.fixed_cost_ratio.6m",
+        label="Tỷ lệ chi phí cố định",
+        value=fixed_cost_ratio,
+        value_text=fmt_pct(fixed_cost_ratio),
+        unit="pct",
+        timeframe="6m",
+        source_tool="recurring_cashflow_detect_v1",
+        source_path="fixed_cost_ratio",
+    )
+
+
+def _extract_jar_facts(tool_outputs: Dict[str, Any], facts: list[FactV1]) -> None:
+    allocation = tool_outputs.get("jar_allocation_suggest_v1")
+    if not isinstance(allocation, dict):
+        return
+    rows = allocation.get("allocations")
+    if not isinstance(rows, list) or not rows:
+        return
+    first = rows[0] if isinstance(rows[0], dict) else {}
+    if not first:
+        return
+    jar_name = str(first.get("jar_name") or "Unknown")
+    ratio = safe_float(first.get("ratio"))
+    amount = safe_float(first.get("amount"))
+    _add_fact(
+        facts,
+        fact_id="jar.top.name",
+        label="Nhóm phân bổ ưu tiên",
+        value=jar_name,
+        value_text=jar_name,
+        source_tool="jar_allocation_suggest_v1",
+        source_path="allocations[0].jar_name",
+    )
+    if ratio > 0:
+        _add_fact(
+            facts,
+            fact_id="jar.top.ratio",
+            label="Tỷ lệ phân bổ nhóm ưu tiên",
+            value=ratio,
+            value_text=fmt_pct(ratio),
+            unit="pct",
+            source_tool="jar_allocation_suggest_v1",
+            source_path="allocations[0].ratio",
+        )
+    if amount > 0:
+        _add_fact(
+            facts,
+            fact_id="jar.top.amount",
+            label="Số tiền phân bổ nhóm ưu tiên",
+            value=amount,
+            value_text=fmt_money(amount),
+            unit="VND",
+            source_tool="jar_allocation_suggest_v1",
+            source_path="allocations[0].amount",
+        )
+
+
+def _extract_scenario_facts(tool_outputs: Dict[str, Any], facts: list[FactV1]) -> None:
+    raw = tool_outputs.get("what_if_scenario_v1")
+    if not isinstance(raw, dict):
+        return
+    scenario = _scenario_payload(raw)
+    base_total = safe_float(scenario.get("base_total_net_p50"))
+    best_variant = str(scenario.get("best_variant_by_goal") or "")
+    comparisons = scenario.get("scenario_comparison")
+    if not isinstance(comparisons, list):
+        comparisons = []
+
+    _add_fact(
+        facts,
+        fact_id="scenario.base_total_net_p50",
+        label="Tổng net P50 cơ sở",
+        value=base_total,
+        value_text=fmt_money(base_total),
+        unit="VND",
+        source_tool="what_if_scenario_v1",
+        source_path="base_total_net_p50",
+    )
+    if best_variant:
+        _add_fact(
+            facts,
+            fact_id="scenario.best_variant.name",
+            label="Kịch bản tốt nhất",
+            value=best_variant,
+            value_text=best_variant,
+            source_tool="what_if_scenario_v1",
+            source_path="best_variant_by_goal",
+        )
+        for row in comparisons:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("name") or "") != best_variant:
+                continue
+            delta = safe_float(row.get("delta_vs_base"))
+            _add_fact(
+                facts,
+                fact_id="scenario.best_variant.delta",
+                label="Delta kịch bản tốt nhất so với cơ sở",
+                value=delta,
+                value_text=fmt_signed_money(delta),
+                unit="VND",
+                source_tool="what_if_scenario_v1",
+                source_path="scenario_comparison[].delta_vs_base",
+            )
+            break
+
+
+def _extract_guard_facts(tool_outputs: Dict[str, Any], facts: list[FactV1]) -> None:
+    guard = tool_outputs.get("suitability_guard_v1")
+    if not isinstance(guard, dict):
+        return
+    allow = bool(guard.get("allow", True))
+    decision = str(guard.get("decision") or "allow")
+    _add_fact(
+        facts,
+        fact_id="policy.suitability.allow",
+        label="Trạng thái policy cho phép",
+        value=allow,
+        value_text="allow" if allow else "deny",
+        source_tool="suitability_guard_v1",
+        source_path="allow",
+    )
+    _add_fact(
+        facts,
+        fact_id="policy.suitability.decision",
+        label="Quyết định suitability",
+        value=decision,
+        value_text=decision,
+        source_tool="suitability_guard_v1",
+        source_path="decision",
+    )
+
+
+def _extract_slot_facts(extraction_slots: Dict[str, Any], facts: list[FactV1]) -> None:
+    if not isinstance(extraction_slots, dict):
+        return
+
+    target_amount = safe_float(extraction_slots.get("target_amount_vnd"), 0.0) or safe_float(
+        extraction_slots.get("target_amount"), 0.0
+    )
+    if target_amount > 0:
+        _add_fact(
+            facts,
+            fact_id="slot.target_amount_vnd",
+            label="Mục tiêu số tiền từ yêu cầu",
+            value=target_amount,
+            value_text=fmt_money(target_amount),
+            unit="VND",
+            source_tool="intent_extraction",
+            source_path="slots.target_amount_vnd",
+        )
+
+    horizon = int(safe_float(extraction_slots.get("horizon_months"), 0.0))
+    if horizon > 0:
+        _add_fact(
+            facts,
+            fact_id="slot.horizon_months",
+            label="Kỳ hạn từ yêu cầu",
+            value=horizon,
+            value_text=str(horizon),
+            unit="months",
+            source_tool="intent_extraction",
+            source_path="slots.horizon_months",
+        )
+
+    risk_appetite = str(extraction_slots.get("risk_appetite") or "").strip().lower()
+    if risk_appetite in {"conservative", "moderate", "aggressive"}:
+        risk_label_map = {
+            "conservative": "than trong",
+            "moderate": "can bang",
+            "aggressive": "chap nhan rui ro cao",
+        }
+        _add_fact(
+            facts,
+            fact_id="slot.risk_appetite",
+            label="Khau vi rui ro tu yeu cau",
+            value=risk_appetite,
+            value_text=risk_label_map.get(risk_appetite, risk_appetite),
+            source_tool="intent_extraction",
+            source_path="slots.risk_appetite",
+        )
+
+    for key in ["income_delta_pct", "spend_delta_pct"]:
+        value = extraction_slots.get(key)
+        if value is None:
+            continue
+        parsed = safe_float(value)
+        if abs(parsed) > 1.0:
+            parsed = parsed / 100.0
+        if parsed == 0:
+            continue
+        _add_fact(
+            facts,
+            fact_id=f"slot.{key}",
+            label=f"{key} từ yêu cầu",
+            value=parsed,
+            value_text=fmt_pct(parsed),
+            unit="pct",
+            source_tool="intent_extraction",
+            source_path=f"slots.{key}",
+        )
+
+    for key in ["income_delta_amount_vnd", "spend_delta_amount_vnd"]:
+        value = safe_float(extraction_slots.get(key), 0.0)
+        if value <= 0:
+            continue
+        _add_fact(
+            facts,
+            fact_id=f"slot.{key}",
+            label=f"{key} từ yêu cầu",
+            value=value,
+            value_text=fmt_money(value),
+            unit="VND",
+            source_tool="intent_extraction",
+            source_path=f"slots.{key}",
+        )
+
+
+def _extract_citations(kb: Dict[str, Any]) -> list[str]:
+    citations: list[str] = []
+    if not isinstance(kb, dict):
+        return citations
+    matches = kb.get("matches")
+    if not isinstance(matches, list):
+        return citations
+    for item in matches:
+        if not isinstance(item, dict):
+            continue
+        cite = str(item.get("citation") or "").strip()
+        if cite and cite not in citations:
+            citations.append(cite)
+    return citations
+
+
+def _extract_kb_service_facts(kb: Dict[str, Any], facts: list[FactV1]) -> None:
+    if not isinstance(kb, dict):
+        return
+    matches = kb.get("matches")
+    if not isinstance(matches, list) or not matches:
+        return
+
+    corpus_parts: list[str] = []
+    for item in matches:
+        if not isinstance(item, dict):
+            continue
+        for key in ["text", "snippet", "context", "citation"]:
+            value = str(item.get(key) or "").strip()
+            if value:
+                corpus_parts.append(value.lower())
+    if not corpus_parts:
+        return
+
+    corpus = " ".join(corpus_parts)
+    service_patterns: list[tuple[str, str, list[str]]] = [
+        (
+            "savings_deposit",
+            "Savings and deposit service category available",
+            ["saving", "tiet kiem", "deposit", "term deposit", "recurring savings", "goal bucket"],
+        ),
+        (
+            "loans_credit",
+            "Loan and credit service category available",
+            ["loan", "vay", "overdraft", "debt consolidation", "installment"],
+        ),
+        (
+            "cards_payments",
+            "Card and payment control service category available",
+            ["credit card", "debit card", "auto debit", "payment", "spend cap"],
+        ),
+        (
+            "service_playbook",
+            "Service advisory playbook available",
+            ["advisory playbook", "service suggestion policy", "mapping guide"],
+        ),
+    ]
+
+    existing_ids = {fact.fact_id for fact in facts}
+    matched = 0
+    for suffix, label, terms in service_patterns:
+        if not any(term in corpus for term in terms):
+            continue
+        fact_id = f"kb.service_category.{suffix}"
+        if fact_id in existing_ids:
+            continue
+        _add_fact(
+            facts,
+            fact_id=fact_id,
+            label=label,
+            value=True,
+            value_text="available",
+            source_tool="retrieve_from_aws_kb",
+            source_path="matches[].text",
+        )
+        existing_ids.add(fact_id)
+        matched += 1
+
+    if matched > 0 and "kb.service_category.count" not in existing_ids:
+        _add_fact(
+            facts,
+            fact_id="kb.service_category.count",
+            label="Number of service categories supported by KB context",
+            value=matched,
+            value_text=str(matched),
+            source_tool="retrieve_from_aws_kb",
+            source_path="matches[].text",
+        )
+
+
+def _required_prefixes_for_intent(intent: str) -> list[str]:
+    if intent == "summary":
+        return ["spend.", "forecast."]
+    if intent == "risk":
+        return ["risk."]
+    if intent == "planning":
+        return ["goal.", "spend."]
+    if intent == "scenario":
+        return ["scenario."]
+    if intent == "invest":
+        return ["policy."]
+    return ["policy."]
+
+
+def build_evidence_pack(
+    *,
+    intent: str,
+    language: LanguageCode,
+    tool_outputs: Dict[str, Any],
+    kb: Dict[str, Any],
+    policy_flags: Dict[str, Any],
+    extraction_slots: Dict[str, Any] | None = None,
+) -> tuple[EvidencePackV1, list[str]]:
+    facts: list[FactV1] = []
+    _extract_spend_facts(tool_outputs, facts)
+    _extract_forecast_facts(tool_outputs, facts)
+    _extract_risk_facts(tool_outputs, facts)
+    _extract_anomaly_facts(tool_outputs, facts)
+    _extract_goal_facts(tool_outputs, facts)
+    _extract_recurring_facts(tool_outputs, facts)
+    _extract_jar_facts(tool_outputs, facts)
+    _extract_scenario_facts(tool_outputs, facts)
+    _extract_guard_facts(tool_outputs, facts)
+    _extract_slot_facts(extraction_slots or {}, facts)
+    _extract_kb_service_facts(kb, facts)
+
+    reason_codes: list[str] = []
+    required_prefixes = _required_prefixes_for_intent(intent)
+    if not any(any(fact.fact_id.startswith(prefix) for prefix in required_prefixes) for fact in facts):
+        reason_codes.append("insufficient_facts")
+
+    evidence = EvidencePackV1(
+        intent=intent or "out_of_scope",
+        language=language,
+        facts=facts,
+        citations=_extract_citations(kb),
+        policy_flags=policy_flags,
+    )
+    return evidence, reason_codes

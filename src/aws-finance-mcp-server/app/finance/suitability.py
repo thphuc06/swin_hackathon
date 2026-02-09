@@ -1,6 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any, Dict
 
 from app.supabase_rest import SupabaseRestClient, get_supabase_client
@@ -12,6 +13,7 @@ TOOL_NAME = "suitability_guard_v1"
 DEFAULT_DISCLAIMER = "Educational guidance only. We do not provide investment advice."
 
 EXECUTION_ACTIONS = {"buy", "sell", "execute", "trade", "order", "transfer_funds"}
+RECOMMENDATION_ACTIONS = {"recommend_buy", "recommend_sell", "recommend_trade"}
 INVEST_KEYWORDS = {
     "invest",
     "stock",
@@ -27,11 +29,16 @@ INVEST_KEYWORDS = {
 
 
 def _contains_invest_intent(text: str) -> bool:
-    normalized = text.lower()
+    normalized = _normalize_text(text)
     for keyword in INVEST_KEYWORDS:
         if re.search(rf"\b{re.escape(keyword)}\b", normalized):
             return True
     return False
+
+
+def _normalize_text(text: str) -> str:
+    stripped = "".join(ch for ch in unicodedata.normalize("NFD", str(text or "")) if unicodedata.category(ch) != "Mn")
+    return stripped.lower()
 
 
 def suitability_guard(
@@ -53,13 +60,25 @@ def suitability_guard(
     prompt_text = prompt or ""
 
     invest_like = _contains_invest_intent(intent_norm) or _contains_invest_intent(prompt_text)
+    recommendation_hint = bool(
+        re.search(
+            r"\b(co nen|nen|should i|is it a good time to)\s*(mua|ban|buy|sell)\b",
+            _normalize_text(prompt_text),
+        )
+    )
     is_execution = action in EXECUTION_ACTIONS
+    is_recommendation = action in RECOMMENDATION_ACTIONS or recommendation_hint
 
-    if is_execution and invest_like:
+    if invest_like and is_execution:
         allow = False
         decision = "deny_execution"
         reason_codes = ["execution_blocked", "education_only_policy"]
-        refusal = "I cannot execute or recommend buy/sell actions. I can provide educational guidance only."
+        refusal = "I cannot execute buy/sell actions. I can provide educational guidance only."
+    elif invest_like and is_recommendation:
+        allow = False
+        decision = "deny_recommendation"
+        reason_codes = ["investment_recommendation_blocked", "education_only_policy"]
+        refusal = "I cannot provide buy/sell recommendations. I can help with cashflow, budgeting, and non-investment risk planning."
     elif invest_like:
         allow = True
         decision = "education_only"
@@ -107,3 +126,4 @@ def suitability_guard(
         payload={"params": tool_input, "reason_codes": reason_codes},
     )
     return result
+

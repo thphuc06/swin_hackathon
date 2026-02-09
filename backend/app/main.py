@@ -5,21 +5,16 @@ from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routes import (
-    aggregates,
     audit,
     chat,
-    decision,
-    forecast,
     goals,
-    mcp,
     notifications,
     risk_profile,
-    transactions,
 )
 
 load_dotenv()
 
-app = FastAPI(title="Jars Fintech API", version="0.1.0")
+app = FastAPI(title="Jars Fintech API Gateway", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -28,16 +23,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(transactions.router)
-app.include_router(aggregates.router)
-app.include_router(notifications.router)
-app.include_router(goals.router)
-app.include_router(risk_profile.router)
-app.include_router(forecast.router)
-app.include_router(decision.router)
-app.include_router(chat.router)
-app.include_router(audit.router)
-app.include_router(mcp.router)
+# Core routes - thin API gateway
+app.include_router(chat.router)  # Proxy to AgentCore Runtime
+app.include_router(goals.router)  # User goals management
+app.include_router(risk_profile.router)  # User risk profile
+app.include_router(notifications.router)  # User notifications
+app.include_router(audit.router)  # Audit logs
 
 
 @app.get("/health")

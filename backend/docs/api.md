@@ -135,6 +135,8 @@ Compute runway and stress flags from forecast.
 
 ### POST /chat/stream
 SSE stream from AgentCore Runtime or local AgentCore app.
+- Content-Type: `text/event-stream; charset=utf-8`
+- Response headers: `Cache-Control: no-cache`, `Connection: keep-alive`, `X-Accel-Buffering: no`
 
 ## Audit
 

@@ -63,3 +63,23 @@ body {
 .chat-agent {
   @apply bg-sand text-ink border border-slate/10;
 }
+
+.chat-markdown {
+  @apply whitespace-pre-wrap;
+}
+
+.chat-markdown p {
+  @apply my-0;
+}
+
+.chat-markdown ul {
+  @apply my-2 list-disc space-y-1 pl-5;
+}
+
+.chat-markdown ol {
+  @apply my-2 list-decimal space-y-1 pl-5;
+}
+
+.chat-markdown strong {
+  @apply font-semibold;
+}

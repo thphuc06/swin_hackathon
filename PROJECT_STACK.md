@@ -26,6 +26,9 @@ Layer choices (refactor)
 | Tool authorization | AgentCore Policy (Cedar) | Deterministic compliance | Allow/deny tool calls by intent/scope |
 | Memory | AgentCore Memory | Store summaries/prefs/goals only | Short-term + long-term memory |
 | What-if compute | AgentCore Code Interpreter | ETA ranges with assumptions | Sandbox simulation |
+| Anomaly detection | River (ADWIN) + PyOD (ECOD) | Streaming drift + outlier detection | Real-time transaction monitoring |
+| Change point detection | Ruptures (Pelt) | Offline structural break detection | Income/spend pattern shifts |
+| Forecasting | Darts (ExponentialSmoothing) + statsmodels | Deterministic, auditable time series | Cashflow projection, runway estimates |
 | Safety | Bedrock Guardrails | PII/prompt attacks | Input/output filters + disclaimers |
 | Observability | CloudWatch + AgentCore OTel | Trace + replay for audit | Logs/metrics/traces |
 | IaC | Terraform/CDK (minimal) | Clear path to production | Repeatable deploy (gateway/runtime/roles) |
@@ -35,6 +38,29 @@ RAG KB notes
 - Vector store: OpenSearch Serverless (AWS-native, scales well)
 - Option: Aurora PostgreSQL-Compatible Edition (pgvector) if SQL-only desired
 - KB retrieval is served via MCP KB server (open-source) behind AgentCore Gateway
+
+Current implementation snapshot (Tier2 agent, as-built)
+- Entrypoint remains `POST /chat/stream` (SSE), no external API changes.
+- Encoding gate is now placed before semantic router:
+  - deterministic `detect -> repair -> fail_fast`
+  - normalized Unicode prompt (default `NFC`)
+  - fail-fast short-circuits routing/tool calls to prevent wrong intent mapping
+- Routing is semantic-first:
+  - Bedrock structured extraction (`intent_extraction_v1`)
+  - deterministic planner policy (`router/policy.py`)
+  - clarifying questions (1-2 MCQ) when confidence/slots are insufficient
+- Tool execution is policy-bundle based (no keyword branch routing in runtime path):
+  - `summary` -> spend + forecast + jar allocation
+  - `risk` -> spend + anomaly + risk profile
+  - `planning` -> spend + forecast + recurring + goal + jar allocation
+  - `scenario` -> what-if scenario
+  - `invest` -> suitability guard + risk profile (education-only)
+  - `out_of_scope` -> suitability guard
+- Response generation is LLM-grounded:
+  - `facts -> advisory_context (insights/actions) -> answer_plan_v2 -> grounding validator -> renderer`
+  - renderer binds placeholders `[F:fact_id]` to verified facts.
+- In `RESPONSE_MODE=llm_enforce`, fallback is `facts_only_compact_renderer`; legacy intent templates are not used for normal enforce responses.
+- Audit payload now includes `routing_meta`, `response_meta`, `evidence_pack`, `advisory_context`, `answer_plan_v2`.
 
 A) Implementation blueprint (MVP)
 
@@ -94,6 +120,12 @@ Training & data plan: see `model_data_train.md`.
 | kb_retrieve | MCP KB server -> Bedrock KB | KB retrieve | citations + governance |
 | code_interpreter_run | AgentCore CI | n/a | what-if ETA |
 | audit_write | BFF/log | POST /audit | trace + decision |
+| spend_analytics_v1 | Finance MCP | tools/call | deterministic spend/income/net summary |
+| anomaly_signals_v1 | Finance MCP | tools/call | anomaly flags (River ADWIN drift, PyOD ECOD outliers, Ruptures Pelt change points) |
+| cashflow_forecast_v1 | Finance MCP | tools/call | short-horizon cashflow projection bands |
+| jar_allocation_suggest_v1 | Finance MCP | tools/call | jar split recommendations from spending profile |
+| risk_profile_non_investment_v1 | Finance MCP | tools/call | non-investment risk scoring + runway context |
+| suitability_guard_v1 | Finance MCP | tools/call | compliance guard for invest/execution intents |
 | recurring_cashflow_detect_v1 | Finance MCP | tools/call | detect recurring/fixed costs + drift alerts |
 | goal_feasibility_v1 | Finance MCP | tools/call | evaluate savings goal feasibility + gap |
 | what_if_scenario_v1 | Finance MCP | tools/call | compare multiple scenario variants deterministically |
@@ -102,6 +134,7 @@ Finance MCP tools currently implemented (`src/aws-finance-mcp-server`)
 - Core 6 tools: `spend_analytics_v1`, `anomaly_signals_v1`, `cashflow_forecast_v1`, `jar_allocation_suggest_v1`, `risk_profile_non_investment_v1`, `suitability_guard_v1`.
 - Extended 3 tools: `recurring_cashflow_detect_v1`, `goal_feasibility_v1`, `what_if_scenario_v1`.
 - All 9 tools return the same audit envelope: `trace_id`, `version`, `params_hash`, `sql_snapshot_ts`, `audit`.
+- **Anomaly detection stack**: River ADWIN (streaming drift), PyOD ECOD (outliers), Ruptures Pelt (change points - replaces Kats CUSUM due to dependency conflicts).
 
 DB schema (list, key fields)
 - users (id, email, created_at)
@@ -152,10 +185,39 @@ Tier1 (insight generator)
 - Low-confidence categorization must not auto-apply; require user confirmation.
 
 Tier2 (LangGraph routing)
-- Router: stats vs goal vs what-if vs risk/suitability.
-- Sequence (tool-first): signals_read -> cashflow_forecast_90d -> sql_read_views -> kb_retrieve -> (code_interpreter if needed) -> reasoning.
-- Citations mandatory when referencing KB.
-- Numbers must come from SQL context only.
+- Router: semantic extraction (`intent_extraction_v1`) + deterministic planner policy.
+- Clarify gates (default):
+  - intent confidence < 0.70 or top2 gap < 0.15 -> clarify
+  - scenario confidence < 0.75 or missing horizon/delta slots -> clarify
+- Tool execution is bundle-driven from route decision (not keyword branch if/else).
+- Reasoning sequence:
+  - `build_evidence_pack`
+  - `build_advisory_context` (deterministic insights + action candidates)
+  - LLM synthesize `answer_plan_v2` (JSON schema)
+  - grounding/compliance validation (fact/insight/action IDs + placeholder binding)
+  - renderer (`Tom tat 3 dong`, `So lieu chinh`, `Khuyen nghi hanh dong`, `Gia dinh va han che`, `Disclaimer`)
+- In `llm_enforce`, fallback uses `facts_only_compact_renderer` when synthesis/validation fails.
+- Numbers shown to user must be grounded to tool facts; response metadata stores fallback/validation reason codes.
+
+Tier2 runtime flags (current)
+- `ROUTER_MODE=rule|semantic_shadow|semantic_enforce`
+- `ROUTER_POLICY_VERSION=v1`
+- `ROUTER_INTENT_CONF_MIN=0.70`
+- `ROUTER_TOP2_GAP_MIN=0.15`
+- `ROUTER_SCENARIO_CONF_MIN=0.75`
+- `ROUTER_MAX_CLARIFY_QUESTIONS=2`
+- `RESPONSE_MODE=template|llm_shadow|llm_enforce`
+- `RESPONSE_PROMPT_VERSION=answer_synth_v2`
+- `RESPONSE_SCHEMA_VERSION=answer_plan_v2`
+- `RESPONSE_POLICY_VERSION=advice_policy_v1`
+- `RESPONSE_MAX_RETRIES=1`
+- `ENCODING_GATE_ENABLED=true`
+- `ENCODING_REPAIR_ENABLED=true`
+- `ENCODING_REPAIR_SCORE_MIN=0.12`
+- `ENCODING_FAILFAST_SCORE_MIN=0.45`
+- `ENCODING_REPAIR_MIN_DELTA=0.10`
+- `ENCODING_NORMALIZATION_FORM=NFC`
+- Compatibility note: `ROUTER_MODE=rule` is currently coerced to semantic runtime path (safe default).
 
 Risk/Suitability guard
 - If intent = invest/buy/sell -> educational guidance only + refusal of advice.

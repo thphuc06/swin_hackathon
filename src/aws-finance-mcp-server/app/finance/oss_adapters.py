@@ -88,50 +88,66 @@ def pyod_ecod_outlier(series: List[float]) -> Dict[str, Any]:
     }
 
 
-def kats_cusum_change_points(day_keys: List[str], series: List[float]) -> Dict[str, Any]:
-    """Optional Kats CUSUM change point adapter.
+def ruptures_pelt_change_points(
+    day_keys: List[str], series: List[float], *, penalty: float = 3.0
+) -> Dict[str, Any]:
+    """Ruptures Pelt change point detection adapter.
 
-    Source: https://facebookresearch.github.io/Kats/
+    Uses the Pelt algorithm (Pruned Exact Linear Time) for offline change point detection.
+    Returns change points as date strings mapped from indices.
+
+    Source: https://github.com/deepcharles/ruptures
     """
 
     try:
-        import pandas as pd
-        from kats.consts import TimeSeriesData
-        from kats.detectors.cusum_detection import CUSUMDetector
+        import numpy as np
+        import ruptures as rpt
     except Exception as exc:  # pragma: no cover
-        return {"available": False, "engine": "kats_cusum", "error": str(exc)}
+        return {"available": False, "engine": "ruptures_pelt", "error": str(exc)}
 
     if len(series) < 20:
         return {
             "available": True,
-            "engine": "kats_cusum",
+            "engine": "ruptures_pelt",
             "ready": False,
             "reason": "insufficient_samples",
             "change_points": [],
         }
 
-    timestamps = [datetime.fromisoformat(f"{d}T00:00:00") for d in day_keys]
-    df = pd.DataFrame({"time": timestamps, "value": series})
-    ts_data = TimeSeriesData(df=df)
-    detector = CUSUMDetector(ts_data)
-    cps = detector.detector()
+    # Convert to numpy array and reshape for ruptures (requires 2D array)
+    signal = np.asarray(series, dtype=float).reshape(-1, 1)
 
+    # Use Pelt algorithm with rbf (radial basis function) kernel
+    # Common models: "l1", "l2", "rbf", "linear", "normal", "ar"
+    try:
+        algo = rpt.Pelt(model="rbf", min_size=2, jump=1).fit(signal)
+        # penalty controls sensitivity: higher = fewer change points
+        change_point_indices = algo.predict(pen=penalty)
+    except Exception as exc:  # pragma: no cover
+        return {
+            "available": True,
+            "engine": "ruptures_pelt",
+            "ready": False,
+            "error": f"Detection failed: {str(exc)}",
+            "change_points": [],
+        }
+
+    # ruptures returns indices including the end of the signal
+    # Filter out the last index (signal length) and map to date strings
     points: List[str] = []
-    for cp in cps:
-        time_value = cp.cp_index if hasattr(cp, "cp_index") else None
-        if time_value is None:
-            continue
-        try:
-            points.append(str(time_value))
-        except Exception:
-            continue
+    for idx in change_point_indices:
+        # ruptures uses 1-indexed, but returns the position after the change
+        # We want the date where the change occurred
+        if 0 < idx < len(day_keys):
+            points.append(day_keys[idx])
 
     return {
         "available": True,
-        "engine": "kats_cusum",
+        "engine": "ruptures_pelt",
         "ready": True,
         "change_points": points[:10],
         "change_detected": bool(points),
+        "penalty": penalty,
     }
 
 

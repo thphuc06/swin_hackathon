@@ -11,6 +11,63 @@ Minimal AWS-first fintech advisory demo built on Amazon Bedrock AgentCore Runtim
 - **Safety**: Bedrock Guardrails (optional)
 - **Auth**: Cognito User Pool JWT (AccessToken)
 
+## Current runtime flow (implemented)
+
+Runtime path in `agent/graph.py` now uses semantic routing + grounded synthesis:
+
+1. `encoding_gate`:
+   - Deterministic UTF-8 gate: `detect -> repair -> fail_fast`.
+   - Normalize prompt by Unicode form (`NFC` default).
+   - On `fail_fast`, short-circuit before router/tools and return safe retry message.
+2. `intent_router`:
+   - LLM structured extraction (`intent_extraction_v1`) via Bedrock.
+   - Deterministic planner policy (`router/policy.py`) decides:
+     - intent/tool bundle
+     - clarify or execute
+     - fallback markers
+3. `suitability_guard`:
+   - Always runs first for compliance.
+   - May short-circuit response (`deny_execution` / `education_only`).
+4. `decision_engine`:
+   - Executes tool bundle from route decision (not keyword hardcode).
+5. `reasoning`:
+   - `build_evidence_pack` (facts from tool outputs)
+   - `build_advisory_context` (deterministic insights + action candidates)
+   - LLM synthesis (`answer_plan_v2`) with strict JSON schema
+   - grounding/compliance validator
+   - renderer (fact placeholder binding)
+6. `memory_update`:
+   - Writes `routing_meta`, `response_meta`, `evidence_pack`, `advisory_context`, `answer_plan_v2` to audit payload.
+
+### Response modes
+
+- `RESPONSE_MODE=template`: legacy template rendering (emergency path).
+- `RESPONSE_MODE=llm_shadow`: run LLM pipeline in shadow, return legacy body.
+- `RESPONSE_MODE=llm_enforce`: return LLM-grounded response.
+
+In `llm_enforce`, if synthesis/grounding fails, fallback is `facts_only_compact_renderer` (not legacy intent template).
+
+### Router + response env knobs
+
+- `ROUTER_MODE=rule|semantic_shadow|semantic_enforce`
+- `ROUTER_POLICY_VERSION=v1`
+- `ROUTER_INTENT_CONF_MIN=0.70`
+- `ROUTER_TOP2_GAP_MIN=0.15`
+- `ROUTER_SCENARIO_CONF_MIN=0.75`
+- `ROUTER_MAX_CLARIFY_QUESTIONS=2`
+- `RESPONSE_PROMPT_VERSION=answer_synth_v2`
+- `RESPONSE_SCHEMA_VERSION=answer_plan_v2`
+- `RESPONSE_POLICY_VERSION=advice_policy_v1`
+- `RESPONSE_MAX_RETRIES=1`
+- `ENCODING_GATE_ENABLED=true`
+- `ENCODING_REPAIR_ENABLED=true`
+- `ENCODING_REPAIR_SCORE_MIN=0.12`
+- `ENCODING_FAILFAST_SCORE_MIN=0.45`
+- `ENCODING_REPAIR_MIN_DELTA=0.10`
+- `ENCODING_NORMALIZATION_FORM=NFC`
+
+Note: `ROUTER_MODE=rule` is kept for compatibility but runtime currently forces semantic path for safety rollout.
+
 ## Repo layout
 
 ```
@@ -102,6 +159,17 @@ $seed = (Get-Content ..\..\backend\tmp\seed_manifest_single_user.json | ConvertF
 .\scripts\run_finance_mcp_smoke.ps1 -BaseUrl "http://127.0.0.1:8020" -SeedUserId $seed
 ```
 
+Gateway smoke check (prefixed tool names + auth):
+
+```powershell
+cd C:\HCMUS\PYTHON\jars-fintech-agentcore-mvp\src\aws-finance-mcp-server
+$seed = (Get-Content ..\..\backend\tmp\seed_manifest_single_user.json | ConvertFrom-Json).seed_user_id
+.\scripts\run_gateway_finance_smoke.ps1 `
+  -GatewayEndpoint "https://<gateway-id>.gateway.bedrock-agentcore.us-east-1.amazonaws.com" `
+  -SeedUserId $seed `
+  -AuthToken "<cognito-access-token>"
+```
+
 ## Deploy Agent to AgentCore Runtime (Starter Toolkit)
 
 1) Install packages
@@ -146,6 +214,43 @@ The agent also auto-resolves tool names by calling `tools/list`.
 If `AGENTCORE_RUNTIME_ARN` is set in `backend/.env`, the backend calls AWS Runtime.
 Use **AccessToken** (token_use=access) when AgentCore is configured with `allowedClients`.
 
+## Demo-first E2E (Frontend local -> Backend local -> Runtime -> Gateway -> MCP)
+
+1) Keep finance MCP in demo mode (temporary):
+- App Runner env: `DEV_BYPASS_AUTH=true`
+- Gateway target `finance-mcp`: outbound auth `No authorization`
+
+2) Backend local env:
+- `AGENTCORE_RUNTIME_ARN=<runtime-arn>`
+- `COGNITO_USER_POOL_ID=<pool-id>`
+- `COGNITO_CLIENT_ID=<client-id>`
+- `AWS_REGION=us-east-1`
+- `DEV_BYPASS_AUTH=false`
+
+3) Run backend local:
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8010
+```
+
+4) Smoke `/chat/stream`:
+```powershell
+cd backend
+.\scripts\run_chat_stream_smoke.ps1 -BackendBaseUrl "http://127.0.0.1:8010" -AuthToken "<cognito-access-token>" -Prompt "Tom tat chi tieu 30 ngay"
+```
+
+5) Frontend local:
+```powershell
+cd frontend
+npm run dev
+```
+Set `NEXT_PUBLIC_API_BASE_URL=http://localhost:8010`, paste AccessToken in chat page, then run prompts for summary/planning/scenario/invest.
+
+6) After demo hardening:
+- rotate exposed secrets
+- set `DEV_BYPASS_AUTH=false` on finance MCP
+- configure outbound auth from Gateway to finance-mcp
+
 ## Gateway + Policy notes
 
 - Configure the Gateway target URL to the MCP server `/mcp` endpoint.
@@ -162,6 +267,15 @@ Use **AccessToken** (token_use=access) when AgentCore is configured with `allowe
   - `recurring_cashflow_detect_v1`
   - `goal_feasibility_v1`
   - `what_if_scenario_v1`
+
+### Intent -> tool bundle policy (v1)
+
+- `summary` -> `spend_analytics_v1`, `cashflow_forecast_v1`, `jar_allocation_suggest_v1`
+- `risk` -> `spend_analytics_v1`, `anomaly_signals_v1`, `risk_profile_non_investment_v1`
+- `planning` -> `spend_analytics_v1`, `cashflow_forecast_v1`, `recurring_cashflow_detect_v1`, `goal_feasibility_v1`, `jar_allocation_suggest_v1`
+- `scenario` -> `what_if_scenario_v1`
+- `invest` -> `suitability_guard_v1`, `risk_profile_non_investment_v1` (education-only)
+- `out_of_scope` -> `suitability_guard_v1`
 
 ## Knowledge Base (RAG)
 

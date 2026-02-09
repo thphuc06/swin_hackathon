@@ -23,7 +23,7 @@ from .data import (
     fetch_transactions_in_window,
     write_audit_event,
 )
-from .oss_adapters import kats_cusum_change_points, pyod_ecod_outlier, river_adwin_drift
+from .oss_adapters import ruptures_pelt_change_points, pyod_ecod_outlier, river_adwin_drift
 
 TOOL_NAME = "anomaly_signals_v1"
 
@@ -91,7 +91,7 @@ def anomaly_signals(
     spend_series = [daily_spend.get(day, 0.0) for day in day_keys]
     river_result = river_adwin_drift(spend_series)
     pyod_result = pyod_ecod_outlier(spend_series)
-    kats_result = kats_cusum_change_points(day_keys, spend_series)
+    ruptures_result = ruptures_pelt_change_points(day_keys, spend_series, penalty=3.0)
 
     median_spend = _median(spend_series)
     mad_spend = _mad(spend_series, median_spend)
@@ -147,7 +147,7 @@ def anomaly_signals(
         flags.append("spend_drift")
     if bool(pyod_result.get("outlier_flag")):
         flags.append("spend_outlier")
-    if bool(kats_result.get("change_detected")):
+    if bool(ruptures_result.get("change_detected")):
         flags.append("change_point")
     if income_drop_flag:
         flags.append("income_drop")
@@ -186,7 +186,7 @@ def anomaly_signals(
         "external_engines": {
             "river_adwin": river_result,
             "pyod_ecod": pyod_result,
-            "kats_cusum": kats_result,
+            "ruptures_pelt": ruptures_result,
         },
     }
 

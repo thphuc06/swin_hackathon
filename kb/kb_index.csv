@@ -2,3 +2,8 @@ name,doc_type,summary
 risk_suitability,policy,Risk suitability guidance and boundaries
 housing_affordability,template,Housing ETA template with assumptions
 no_upsell,policy,Explicit no-upsell policy and trust requirements
+services_savings_and_deposits,service,Category-level guidance for savings and deposit services
+services_loans_and_credit,service,Category-level guidance for loans and credit services
+services_cards_and_payments,service,Category-level guidance for card and payment services
+advisory_playbook_banking_services,playbook,Mapping user situations to service categories and actions
+service_terms_glossary,glossary,Simple definitions for financial service terms used in advice
