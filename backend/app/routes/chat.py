@@ -102,7 +102,7 @@ def _invoke_agentcore(
                 params={"qualifier": "DEFAULT"},
                 headers=headers,
                 json=payload,
-                timeout=100,
+                timeout=180,
                 stream=True,
             )
             if response.status_code >= 400:

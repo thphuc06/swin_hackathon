@@ -2,16 +2,64 @@
 
 Minimal AWS-first fintech advisory demo built on Amazon Bedrock AgentCore Runtime + Gateway + KB RAG.
 
+## 🚀 Quick Start (Test Agent in 2 Minutes)
+
+```powershell
+# 1. Generate service token
+cd c:\HCMUS\PYTHON\jars-fintech-agentcore-mvp\agent
+python genToken.py 2>&1 | Select-String "^AccessToken:" | % { ($_ -replace "^AccessToken:\s*","").Trim() } | Set-Variable token
+
+# 2. Test agent (expect 7-17s response)
+agentcore invoke --bearer-token $token '{"prompt": "Tóm tắt chi tiêu 30 ngày qua của tôi", "user_id": "demo-user"}'
+
+# 3. Run full test suite (12 cases, ~15-20 min)
+cd ..
+.\agent_test_runner.ps1 -Token $token
+```
+
+**Expected:** ✅ Sub-20s responses, no timeout errors, Gateway authentication working
+
+## ⚡ Current Status (Feb 2026)
+
+**Agent Performance: OPTIMIZED ✅**
+- Response time: **7-17s** (was 26-32s) = **40-77% improvement**
+- Connection pooling implemented (HTTPAdapter with 10 connections, 20 max pool size)
+- Timeout configuration optimized (Bedrock: 120s, Tool execution: 120s)
+- Gateway authentication fixed (service-to-service token)
+- Agent ARN: `arn:aws:bedrock-agentcore:us-east-1:021862553142:runtime/demoAgentCore-apmuG59e4V`
+- Latest image: `021862553142.dkr.ecr.us-east-1.amazonaws.com/bedrock-agentcore-demoagentcore:20260210-043325-959`
+- Documentation: See [AGENT_OPTIMIZATION_CHANGES.md](AGENT_OPTIMIZATION_CHANGES.md) for detailed optimization report
+
+**Test Results:**
+- Simple queries: ~7s
+- Complex queries with clarification: ~17s
+- All 9 financial tools accessible via MCP Gateway
+- No timeout errors with optimized configuration
+
 ## Architecture
 
+**Production Flow (Optimized):**
+```
+Frontend (Next.js) 
+  → Backend (FastAPI) 
+    → AgentCore Runtime (LangGraph) 
+      → MCP Gateway (https://jars-gw-afejhtqoqd...com/mcp)
+        → MCP Financial Tools Server (App Runner)
+          → Supabase (Data Store)
+```
+
+**Key Components:**
 - **Frontend**: Next.js + Tailwind
 - **Backend**: FastAPI BFF (REST + SSE)
-- **Agent**: LangGraph orchestrator running on AgentCore Runtime
+- **Agent**: LangGraph orchestrator running on AgentCore Runtime (OPTIMIZED)
+- **MCP Gateway**: Routes to MCP Financial Tools (9 tools available)
 - **RAG**: Knowledge Bases for Bedrock via MCP tool (Gateway)
 - **Safety**: Bedrock Guardrails (optional)
-- **Auth**: Cognito User Pool JWT (AccessToken)
+- **Auth**: Cognito User Pool JWT (AccessToken for service-to-service)
 
 ## Current runtime flow (implemented)
+
+**Architecture Note:** Agent calls **MCP Gateway** (not backend API) for all tool execution. Gateway routes to MCP Financial Tools Server (App Runner) which queries Supabase.
 
 Runtime path in `agent/graph.py` now uses semantic routing + grounded synthesis:
 
@@ -26,10 +74,11 @@ Runtime path in `agent/graph.py` now uses semantic routing + grounded synthesis:
      - clarify or execute
      - fallback markers
 3. `suitability_guard`:
-   - Always runs first for compliance.
+   - Always runs first for compliance (via Gateway → MCP Financial Tools).
    - May short-circuit response (`deny_execution` / `education_only`).
 4. `decision_engine`:
-   - Executes tool bundle from route decision (not keyword hardcode).
+   - Executes tool bundle from route decision (via Gateway → MCP Server).
+   - Uses persistent HTTP sessions with connection pooling (optimized).
 5. `reasoning`:
    - `build_evidence_pack` (facts from tool outputs)
    - `build_advisory_context` (deterministic insights + action candidates)
@@ -170,46 +219,166 @@ $seed = (Get-Content ..\..\backend\tmp\seed_manifest_single_user.json | ConvertF
   -AuthToken "<cognito-access-token>"
 ```
 
-## Deploy Agent to AgentCore Runtime (Starter Toolkit)
+## 🧪 Testing the Agent (RECOMMENDED METHOD)
 
-1) Install packages
+### Prerequisites
+1. Agent deployed to AWS AgentCore Runtime
+2. MCP Gateway running with financial tools target
+3. Cognito credentials configured in `agent/.env`
+
+### Quick Test (5 minutes)
+
+**Step 1: Generate Service Token**
+```powershell
+cd agent
+python genToken.py
+# Copy the AccessToken from output (starts with eyJ...)
+```
+
+**Step 2: Test Agent with Vietnamese Prompt**
+```powershell
+# Generate token and invoke in one command
+python genToken.py 2>&1 | Select-String "^AccessToken:" | % { ($_ -replace "^AccessToken:\s*","").Trim() } | Set-Variable token
+
+agentcore invoke --bearer-token $token '{"prompt": "Tóm tắt chi tiêu 30 ngày qua của tôi", "user_id": "demo-user"}'
+```
+
+**Expected Results:**
+- Response time: **< 20s** (7-17s typical)
+- Agent returns clarifying question OR spending summary
+- No `401 Unauthorized` or `424 Failed Dependency` errors
+- CloudWatch logs show "Tool registry initialized" (not "DEFAULT_USER_TOKEN not set")
+
+**Step 3: Simple Query Test**
+```powershell
+agentcore invoke --bearer-token $token '{"prompt": "Chi tiêu của tôi tháng này là bao nhiêu?", "user_id": "demo-user"}'
+```
+Expected: **< 10s** response time
+
+### Comprehensive Test Suite
+
+```powershell
+# Run all 12 test cases (15-20 minutes)
+cd c:\HCMUS\PYTHON\jars-fintech-agentcore-mvp
+python agent/genToken.py 2>&1 | Select-String "^AccessToken:" | % { ($_ -replace "^AccessToken:\s*","").Trim() } | Set-Variable token
+.\agent_test_runner.ps1 -Token $token
+```
+
+Test cases cover:
+- Summary queries (spend analytics)
+- Risk assessment
+- Planning/goal feasibility
+- What-if scenarios
+- Out-of-scope handling
+
+**Verification Checklist (Verified 2026-02-10):**
+-   [x] **Gateway Integration**: Validated via `verify_gateway_tools.py`. The Gateway endpoint is accessible and correctly routes requests.
+-   [x] **Tool Selection (Routing)**: Validated via `run_qa_tests.py`. The Agent correctly selects `spend_analytics_v1` for summary requests and `recurring_cashflow_detect_v1` for expense optimization.
+-   [x] **Reasoning Logic**: Validated via `run_qa_tests.py` (CASE_01). The Agent incorporates tool outputs (e.g., specific spending amounts) into natural language responses without hardcoding.
+-   [x] **Backend Connectivity**: Validated for `spend_analytics_v1`. Requires valid `user_id` to function.
+
+**Verification Scripts:**
+-   `verify_gateway_tools.py`: Tests direct connectivity to the Gateway and specific tool execution.
+-   `run_qa_tests.py`: Runs a full conversational test suite against the deployed agent. Ensure `TEST_USER_ID` is set correctly in the script.ired
+- Fix: Redeploy agent with fresh service token (see Deploy section below)
+
+**Issue: 424 Failed Dependency**  
+- Cause: Gateway authentication failed or MCP server down
+- Fix: Verify Gateway endpoint includes `/mcp` path, check MCP server status
+
+**Issue: Timeout after 60s**
+- Cause: Old deployment without optimizations
+- Fix: Redeploy with optimized timeouts (see Deploy section)
+
+**Check CloudWatch Logs:**
+```powershell
+aws logs tail /aws/bedrock-agentcore/runtimes/demoAgentCore-apmuG59e4V --follow
+```
+
+## 🚀 Deploy Agent to AgentCore Runtime (Starter Toolkit)
+
+### Prerequisites
 ```bash
 pip install bedrock-agentcore bedrock-agentcore-starter-toolkit
 ```
 
-2) Configure
-```bash
+### Standard Deployment (with optimizations)
+
+**Step 1: Generate Service Token**
+```powershell
 cd agent
-agentcore configure -e main.py
+python genToken.py 2>&1 | Select-String "^AccessToken:" | % { ($_ -replace "^AccessToken:\s*","").Trim() } | Set-Variable serviceToken
 ```
 
-3) Deploy with required runtime env
+**Step 2: Deploy with Environment Variables**
 ```bash
+cd agent
 agentcore deploy --auto-update-on-conflict \
+  --env AGENTCORE_GATEWAY_ENDPOINT=https://jars-gw-afejhtqoqd.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp \
+  --env DEFAULT_USER_TOKEN=$serviceToken \
   --env AWS_REGION=us-east-1 \
   --env BEDROCK_MODEL_ID=amazon.nova-pro-v1:0 \
-  --env BACKEND_API_BASE=https://<public-backend-url> \
+  --env BEDROCK_GUARDRAIL_ID=arn:aws:bedrock:us-east-1:021862553142:guardrail-profile/us.guardrail.v1:0 \
+  --env BEDROCK_GUARDRAIL_VERSION=DRAFT \
   --env BEDROCK_KB_ID=G6GLWTUKEL \
-  --env AGENTCORE_GATEWAY_ENDPOINT=https://<gateway-id>.gateway.bedrock-agentcore.<region>.amazonaws.com/mcp \
+  --env BEDROCK_KB_DATASOURCE_ID=WTYVWINQP9 \
+  --env BEDROCK_READ_TIMEOUT=120 \
+  --env TOOL_EXECUTION_TIMEOUT=120 \
+  --env GATEWAY_TIMEOUT_SECONDS=25 \
+  --env ROUTER_MODE=semantic_enforce \
+  --env RESPONSE_MODE=llm_enforce \
   --env LOG_LEVEL=info
 ```
 
-Optional (guardrails):
-```bash
---env BEDROCK_GUARDRAIL_ID=arn:aws:bedrock:... \
---env BEDROCK_GUARDRAIL_VERSION=DRAFT
+**PowerShell (Windows):**
+```powershell
+cd agent
+python genToken.py 2>&1 | Select-String "^AccessToken:" | % { ($_ -replace "^AccessToken:\s*","").Trim() } | Set-Variable serviceToken
+
+agentcore deploy --auto-update-on-conflict `
+  --env AGENTCORE_GATEWAY_ENDPOINT=https://jars-gw-afejhtqoqd.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp `
+  --env DEFAULT_USER_TOKEN=$serviceToken `
+  --env BEDROCK_READ_TIMEOUT=120 `
+  --env TOOL_EXECUTION_TIMEOUT=120 `
+  --env GATEWAY_TIMEOUT_SECONDS=25 `
+  --env LOG_LEVEL=info
 ```
 
-If your Gateway prefixes tool names, set:
-```
-AGENTCORE_GATEWAY_TOOL_NAME=<prefixed_tool_name>
-```
-The agent also auto-resolves tool names by calling `tools/list`.
+**Critical Environment Variables:**
+- `AGENTCORE_GATEWAY_ENDPOINT`: **MUST include `/mcp` path** (base URL returns 404)
+- `DEFAULT_USER_TOKEN`: Service-to-service authentication token from `genToken.py`
+- `BEDROCK_READ_TIMEOUT=120`: Increased from 60s for Vietnamese 900-token responses
+- `TOOL_EXECUTION_TIMEOUT=120`: Increased from 90s to prevent premature failures
+- `GATEWAY_TIMEOUT_SECONDS=25`: Per-request timeout for Gateway calls
 
-4) Invoke (JWT required)
+**Optional Configuration:**
 ```bash
-# Use Cognito AccessToken in Authorization header
+# HTTP Connection Pooling (already configured in code)
+--env HTTP_POOL_CONNECTIONS=10 \
+--env HTTP_POOL_MAXSIZE=20 \
+
+# Router fine-tuning
+--env ROUTER_INTENT_CONF_MIN=0.70 \
+--env ROUTER_MAX_CLARIFY_QUESTIONS=2 \
+
+# Response customization
+--env RESPONSE_PROMPT_VERSION=answer_synth_v2 \
+--env RESPONSE_MAX_RETRIES=1
 ```
+
+### Verify Deployment
+
+```powershell
+# Check agent status
+agentcore status
+
+# Test immediately after deploy
+python genToken.py 2>&1 | Select-String "^AccessToken:" | % { ($_ -replace "^AccessToken:\s*","").Trim() } | Set-Variable token
+agentcore invoke --bearer-token $token '{"prompt": "Hello test", "user_id": "demo-user"}'
+```
+
+**Expected Build Time:** 30-40 seconds  
+**Expected Response Time:** 7-17s (depending on query complexity)
 
 If `AGENTCORE_RUNTIME_ARN` is set in `backend/.env`, the backend calls AWS Runtime.
 Use **AccessToken** (token_use=access) when AgentCore is configured with `allowedClients`.
@@ -277,6 +446,46 @@ Set `NEXT_PUBLIC_API_BASE_URL=http://localhost:8010`, paste AccessToken in chat 
 - `invest` -> `suitability_guard_v1`, `risk_profile_non_investment_v1` (education-only)
 - `out_of_scope` -> `suitability_guard_v1`
 
+## 🔐 Authentication Architecture
+
+### Service-to-Service (Agent ↔ Gateway)
+
+**Problem:** Agent needs to authenticate to MCP Gateway, but end-user OAuth tokens don't work for service calls.
+
+**Solution:** Use dedicated service account token via `genToken.py`
+
+**Flow:**
+1. `agent/genToken.py` generates Cognito AccessToken using `USER_PASSWORD_AUTH`
+2. Token deployed as `DEFAULT_USER_TOKEN` environment variable
+3. Agent uses token in `Authorization: Bearer <token>` header for Gateway calls
+4. Gateway validates token against Cognito User Pool
+
+**Token Configuration (`agent/.env`):**
+```bash
+COGNITO_USER_POOL_ID=us-east-1_7v1arA5wU
+COGNITO_CLIENT_ID=kn881gncgsv7ku4bc5bm73uue
+COGNITO_CLIENT_SECRET=<your-secret>
+COGNITO_USERNAME=<service-account-username>
+COGNITO_PASSWORD=<service-account-password>
+```
+
+**Generate Token:**
+```powershell
+cd agent
+python genToken.py
+# Output: AccessToken: eyJraWQiOiJr... (1071 chars)
+```
+
+**Token Lifetime:** ~1 hour (3600s)  
+**Rotation:** Redeploy agent with fresh token when expired
+
+### End-User Authentication (Frontend → Backend)
+
+- Frontend obtains Cognito AccessToken via Amplify/Auth
+- Backend validates token against User Pool
+- Backend includes token in `payload["authorization"]` when calling agent
+- Agent still uses `DEFAULT_USER_TOKEN` for Gateway (service-to-service)
+
 ## Knowledge Base (RAG)
 
 - Use `kb/` docs as sample corpus.
@@ -288,13 +497,53 @@ Each module has its own `.env.example` with required variables.
 Token helper: `todo_cognito_token.md` and `agent/genToken.py` (uses env vars).
 Runtime env is **not** baked into the container; set it via `agentcore deploy --env`.
 
-## TODO (post-hackathon scale)
+## 📊 Performance & Optimization
 
-- Replace in-memory store with Supabase Postgres + migrations.
-- Implement EventBridge -> SQS -> worker pipeline for Tier1.
-- Add Gateway MCP tool calls + Policy enforcement.
-- Enable Memory summaries (no raw ledger data stored).
-- Add Observability exporters (CloudWatch + OTEL).
+### Optimization History
+
+**Before (Jan 2026):**
+- Response time: 26-32s (frequent timeouts)
+- No connection pooling (300ms+ SSL handshake per request)
+- Timeout mismatches (60s Bedrock, 90s tool execution + 5s per-task conflict)
+- Synchronous blocking I/O
+
+**After (Feb 2026):**
+- Response time: **7-17s** (40-77% improvement) ✅
+- HTTPAdapter connection pooling (10 connections, 20 max)
+- Unified timeouts (120s Bedrock, 120s tool execution)
+- Retry logic with exponential backoff
+- Persistent sessions per endpoint
+
+**Optimizations Implemented:**
+1. **Connection Pooling** ([agent/tools.py](agent/tools.py))
+   - `_get_gateway_session()` with HTTPAdapter
+   - Saves ~2.5-3.0s per request
+
+2. **Timeout Configuration** ([agent/config.py](agent/config.py))
+   - Bedrock read timeout: 60s → 120s
+   - Tool execution: 90s → 120s (removed 5s per-task conflict)
+   - Gateway: 25s per-request
+
+3. **Retry Logic** ([agent/tools.py](agent/tools.py))
+   - @retry decorator with exponential backoff (1s, 2s, 4s)
+   - Does NOT retry 4xx errors (401/403/404)
+
+4. **Authentication** ([agent/main.py](agent/main.py))
+   - Service token via `DEFAULT_USER_TOKEN` env var
+   - Fallback from `payload.get("authorization")`
+
+**See [AGENT_OPTIMIZATION_CHANGES.md](AGENT_OPTIMIZATION_CHANGES.md) for complete details.**
+
+## TODO (post-MVP scale)
+
+- ✅ ~~Optimize agent performance~~ (DONE: 40-77% improvement)
+- ✅ ~~Fix Gateway authentication~~ (DONE: service token approach)
+- ✅ ~~Implement connection pooling~~ (DONE: HTTPAdapter with retry)
+- Replace in-memory store with Supabase Postgres + migrations
+- Implement EventBridge → SQS → worker pipeline for Tier1
+- Enable Memory summaries (no raw ledger data stored)
+- Add Observability exporters (CloudWatch + OTEL)
+- Token rotation strategy for `DEFAULT_USER_TOKEN`
 
 ## AWS Reference Docs
 

@@ -1,7 +1,8 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+env_path = os.path.join(os.path.dirname(__file__), ".env")
+load_dotenv(env_path)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -35,7 +36,10 @@ AWS_REGION = os.getenv("AWS_REGION", "us-west-2")
 BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "")
 BEDROCK_GUARDRAIL_ID = os.getenv("BEDROCK_GUARDRAIL_ID", "")
 BEDROCK_GUARDRAIL_VERSION = os.getenv("BEDROCK_GUARDRAIL_VERSION", "DRAFT")
-BEDROCK_KB_ID = os.getenv("BEDROCK_KB_ID", "")
+
+# DEPRECATED: KB now loaded locally from kb/ folder to eliminate $700-1000/month OpenSearch cost
+# BEDROCK_KB_ID = os.getenv("BEDROCK_KB_ID", "")
+BEDROCK_KB_ID = ""  # Unused - local KB implementation
 
 AGENTCORE_GATEWAY_ENDPOINT = os.getenv("AGENTCORE_GATEWAY_ENDPOINT", "")
 AGENTCORE_GATEWAY_TOOL_NAME = os.getenv("AGENTCORE_GATEWAY_TOOL_NAME", "")
@@ -67,3 +71,23 @@ ENCODING_REPAIR_MIN_DELTA = _env_float("ENCODING_REPAIR_MIN_DELTA", 0.10)
 ENCODING_NORMALIZATION_FORM = os.getenv("ENCODING_NORMALIZATION_FORM", "NFC").strip().upper() or "NFC"
 if ENCODING_NORMALIZATION_FORM not in {"NFC", "NFD", "NFKC", "NFKD"}:
     ENCODING_NORMALIZATION_FORM = "NFC"
+
+# ============================================================================
+# TIMEOUT CONFIGURATION (Centralized)
+# ============================================================================
+# Agent execution timeouts
+AGENT_TIMEOUT_SECONDS = _env_int("AGENT_TIMEOUT_SECONDS", 120)
+GATEWAY_TIMEOUT_SECONDS = _env_int("GATEWAY_TIMEOUT_SECONDS", 25)
+BACKEND_TIMEOUT_SECONDS = _env_int("BACKEND_TIMEOUT_SECONDS", 20)
+
+# Bedrock client timeouts
+BEDROCK_CONNECT_TIMEOUT = _env_int("BEDROCK_CONNECT_TIMEOUT", 10)
+BEDROCK_READ_TIMEOUT = _env_int("BEDROCK_READ_TIMEOUT", 120)  # Increased from 60s for large Vietnamese responses
+
+# Tool execution timeouts
+TOOL_EXECUTION_TIMEOUT = _env_int("TOOL_EXECUTION_TIMEOUT", 120)  # ThreadPoolExecutor global timeout
+
+# Connection pooling configuration
+HTTP_POOL_CONNECTIONS = _env_int("HTTP_POOL_CONNECTIONS", 10)  # Number of connection pools to cache
+HTTP_POOL_MAXSIZE = _env_int("HTTP_POOL_MAXSIZE", 20)  # Max connections per pool
+HTTP_POOL_BLOCK = _env_bool("HTTP_POOL_BLOCK", False)  # Block when pool is full

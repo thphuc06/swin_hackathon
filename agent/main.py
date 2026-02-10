@@ -8,13 +8,27 @@ from bedrock_agentcore import BedrockAgentCoreApp
 from dotenv import load_dotenv
 
 from graph import run_agent
-from tools import initialize_tool_registry
+from tools import initialize_kb, initialize_tool_registry
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 app = BedrockAgentCoreApp()
 DEFAULT_DISCLAIMER = "Educational guidance only. We do not provide investment advice."
+
+# Initialize local Knowledge Base at startup (replaces OpenSearch/Bedrock KB)
+try:
+    kb_result = initialize_kb()
+    if kb_result.get("status") == "success":
+        logger.info(
+            "Startup: Local KB initialized with %d files: %s",
+            kb_result.get("files", 0),
+            ", ".join(kb_result.get("filenames", [])),
+        )
+    else:
+        logger.error("Startup: KB initialization failed: %s", kb_result.get("error", "unknown"))
+except Exception as exc:
+    logger.error("Startup: KB initialization exception: %s", exc)
 
 # Initialize tool registry at startup (eager loading)
 try:

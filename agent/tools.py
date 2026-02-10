@@ -3,11 +3,16 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import re
 import uuid
+from pathlib import Path
 from typing import Any, Dict
 from urllib.parse import urlparse
 
 import requests
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -19,7 +24,11 @@ from config import (
     AGENTCORE_GATEWAY_ENDPOINT,
     AGENTCORE_GATEWAY_TOOL_NAME,
     BACKEND_API_BASE,
+    BACKEND_TIMEOUT_SECONDS,
     BEDROCK_KB_ID,
+    GATEWAY_TIMEOUT_SECONDS,
+    HTTP_POOL_CONNECTIONS,
+    HTTP_POOL_MAXSIZE,
     USE_LOCAL_MOCKS,
 )
 
@@ -29,6 +38,66 @@ logger = logging.getLogger(__name__)
 _resolved_tool_names: Dict[str, str] = {}
 _tool_schemas: Dict[str, Dict[str, Any]] = {}  # Maps tool name -> full tool definition
 _registry_initialized: bool = False
+
+# Local KB cache (loaded at startup)
+_KB_CONTENT: Dict[str, Dict[str, Any]] = {}
+_KB_INITIALIZED: bool = False
+
+# HTTP connection pooling (reduces SSL handshake overhead by ~2-3s per request)
+_gateway_session: requests.Session | None = None
+_backend_session: requests.Session | None = None
+
+
+def _get_gateway_session() -> requests.Session:
+    """Get persistent session for MCP Gateway with connection pooling."""
+    global _gateway_session
+    if _gateway_session is None:
+        _gateway_session = requests.Session()
+        # Configure connection pooling with retry logic
+        adapter = HTTPAdapter(
+            pool_connections=HTTP_POOL_CONNECTIONS,
+            pool_maxsize=HTTP_POOL_MAXSIZE,
+            max_retries=Retry(
+                total=0,  # Retries handled by tenacity decorator
+                connect=0,
+                read=0,
+                status_forcelist=[],
+            ),
+        )
+        _gateway_session.mount("http://", adapter)
+        _gateway_session.mount("https://", adapter)
+        logger.info(
+            "Initialized Gateway session with connection pooling (pool_connections=%d, pool_maxsize=%d)",
+            HTTP_POOL_CONNECTIONS,
+            HTTP_POOL_MAXSIZE,
+        )
+    return _gateway_session
+
+
+def _get_backend_session() -> requests.Session:
+    """Get persistent session for Backend API with connection pooling."""
+    global _backend_session
+    if _backend_session is None:
+        _backend_session = requests.Session()
+        # Configure connection pooling
+        adapter = HTTPAdapter(
+            pool_connections=HTTP_POOL_CONNECTIONS,
+            pool_maxsize=HTTP_POOL_MAXSIZE,
+            max_retries=Retry(
+                total=0,  # Retries handled by tenacity decorator
+                connect=0,
+                read=0,
+                status_forcelist=[],
+            ),
+        )
+        _backend_session.mount("http://", adapter)
+        _backend_session.mount("https://", adapter)
+        logger.info(
+            "Initialized Backend session with connection pooling (pool_connections=%d, pool_maxsize=%d)",
+            HTTP_POOL_CONNECTIONS,
+            HTTP_POOL_MAXSIZE,
+        )
+    return _backend_session
 
 
 def _hash_payload(payload: Dict[str, Any]) -> str:
@@ -52,6 +121,198 @@ def _should_use_local_mocks() -> bool:
     if AGENTCORE_GATEWAY_ENDPOINT.strip():
         return False
     return True
+
+
+def _load_kb_files() -> Dict[str, Dict[str, Any]]:
+    """Load all Knowledge Base markdown files from kb/ folder into memory.
+    
+    Returns:
+        Dict mapping filename -> {content, sections, doc_type}
+    """
+    kb_dir = Path(__file__).parent.parent / "kb"
+    if not kb_dir.exists():
+        logger.warning("KB directory not found: %s", kb_dir)
+        return {}
+    
+    kb_content = {}
+    kb_files = [
+        "policies.md",
+        "advisory_playbook_banking_services.md",
+        "services_savings_and_deposits.md",
+        "services_loans_and_credit.md",
+        "services_cards_and_payments.md",
+        "service_terms_glossary.md",
+        "disclaimers.md",
+    ]
+    
+    for filename in kb_files:
+        file_path = kb_dir / filename
+        if not file_path.exists():
+            logger.warning("KB file not found: %s", filename)
+            continue
+        
+        try:
+            content = file_path.read_text(encoding="utf-8")
+            sections = _parse_markdown_sections(content, filename)
+            
+            # Determine doc_type from filename
+            doc_type = "policy"
+            if "playbook" in filename:
+                doc_type = "playbook"
+            elif "services_" in filename:
+                doc_type = "service"
+            elif "glossary" in filename:
+                doc_type = "glossary"
+            elif "disclaimer" in filename:
+                doc_type = "disclaimer"
+            
+            kb_content[filename] = {
+                "content": content,
+                "sections": sections,
+                "doc_type": doc_type,
+                "filename": filename,
+            }
+            logger.info("Loaded KB file: %s (%d chars, %d sections)", filename, len(content), len(sections))
+        except Exception as exc:
+            logger.error("Failed to load KB file %s: %s", filename, exc)
+    
+    return kb_content
+
+
+def _parse_markdown_sections(content: str, filename: str) -> list[Dict[str, str]]:
+    """Parse markdown content into sections based on headers."""
+    sections = []
+    lines = content.split("\n")
+    current_section = {"header": filename, "content": "", "level": 0}
+    
+    for line in lines:
+        header_match = re.match(r"^(#{1,6})\s+(.+)$", line)
+        if header_match:
+            # Save previous section if it has content
+            if current_section["content"].strip():
+                sections.append(current_section.copy())
+            # Start new section
+            level = len(header_match.group(1))
+            header_text = header_match.group(2).strip()
+            current_section = {
+                "header": header_text,
+                "content": line + "\n",
+                "level": level,
+            }
+        else:
+            current_section["content"] += line + "\n"
+    
+    # Add last section
+    if current_section["content"].strip():
+        sections.append(current_section)
+    
+    return sections
+
+
+def _match_kb_content_local(query: str, intent: str, filters: Dict[str, str]) -> Dict[str, Any]:
+    """Match query against local KB content using intent-based filtering and keyword matching.
+    
+    Returns same format as original kb_retrieve(): 
+        {"context": str, "matches": list, "filters": dict}
+    """
+    if not _KB_CONTENT:
+        return {
+            "context": "",
+            "matches": [],
+            "filters": filters,
+            "note": "KB not loaded"
+        }
+    
+    # Intent-based document selection
+    intent_key = intent.lower().strip()
+    intent_doc_mapping = {
+        "summary": ["services_savings_and_deposits.md", "services_cards_and_payments.md", "service_terms_glossary.md", "policies.md"],
+        "risk": ["services_loans_and_credit.md", "services_savings_and_deposits.md", "advisory_playbook_banking_services.md", "policies.md"],
+        "planning": ["services_savings_and_deposits.md", "services_loans_and_credit.md", "advisory_playbook_banking_services.md", "policies.md"],
+        "scenario": ["advisory_playbook_banking_services.md", "services_cards_and_payments.md", "services_savings_and_deposits.md", "policies.md"],
+        "invest": ["policies.md", "disclaimers.md", "service_terms_glossary.md"],
+    }
+    
+    # Get relevant documents for this intent
+    relevant_docs = intent_doc_mapping.get(intent_key, list(_KB_CONTENT.keys()))
+    
+    # Extract keywords from query (simple tokenization)
+    query_lower = query.lower()
+    query_keywords = set(re.findall(r'\b\w{3,}\b', query_lower))  # Words 3+ chars
+    
+    # Score and rank sections
+    matches = []
+    for filename in relevant_docs:
+        if filename not in _KB_CONTENT:
+            continue
+        
+        kb_doc = _KB_CONTENT[filename]
+        for section in kb_doc["sections"]:
+            section_text = section["content"].lower()
+            
+            # Simple keyword matching score
+            keyword_matches = sum(1 for kw in query_keywords if kw in section_text)
+            if keyword_matches == 0 and query_keywords:
+                continue  # Skip sections with no keyword matches
+            
+            # Calculate score (0-1 range)
+            score = min(keyword_matches / max(len(query_keywords), 1), 1.0)
+            
+            # Boost score for certain keywords in specific intents
+            if intent_key == "risk" and any(w in section_text for w in ["debt", "restructur", "emergency", "buffer"]):
+                score += 0.2
+            elif intent_key == "planning" and any(w in section_text for w in ["recurring", "savings", "goal", "term deposit"]):
+                score += 0.2
+            elif intent_key == "summary" and any(w in section_text for w in ["demand deposit", "card", "payment", "budget"]):
+                score += 0.2
+            
+            matches.append({
+                "id": f"{filename}#{section['header']}",
+                "text": section["content"][:500].strip(),  # Truncate to 500 chars
+                "citation": f"{filename}",
+                "score": min(score, 1.0),
+                "filename": filename,
+                "section": section["header"],
+            })
+    
+    # Sort by score and take top 3
+    matches.sort(key=lambda x: x["score"], reverse=True)
+    top_matches = matches[:3]
+    
+    # Build context text from top matches
+    context_parts = []
+    for match in top_matches:
+        context_parts.append(f"## {match['section']}\n{match['text']}")
+    
+    context_text = "\n\n".join(context_parts)
+    
+    return {
+        "context": context_text,
+        "matches": top_matches,
+        "filters": filters,
+    }
+
+
+def initialize_kb() -> Dict[str, Any]:
+    """Initialize Knowledge Base by loading all KB files into memory.
+    Call this once at application startup.
+    """
+    global _KB_CONTENT, _KB_INITIALIZED
+    
+    if _KB_INITIALIZED:
+        return {"status": "already_initialized", "files": len(_KB_CONTENT)}
+    
+    try:
+        _KB_CONTENT = _load_kb_files()
+        _KB_INITIALIZED = True
+        return {
+            "status": "success",
+            "files": len(_KB_CONTENT),
+            "filenames": list(_KB_CONTENT.keys()),
+        }
+    except Exception as exc:
+        logger.error("Failed to initialize KB: %s", exc)
+        return {"status": "error", "error": str(exc)}
 
 
 def _auth_headers(token: str) -> Dict[str, str]:
@@ -96,11 +357,12 @@ def _gateway_jsonrpc(payload: Dict[str, Any], user_token: str, call_id: str | No
     log_ctx = {"call_id": call_id or "unknown", "method": payload.get("method")}
     
     try:
-        response = requests.post(
+        session = _get_gateway_session()
+        response = session.post(
             endpoint,
             json=payload,
             headers=_auth_headers(user_token),
-            timeout=25,
+            timeout=GATEWAY_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
         data = response.json()
@@ -118,6 +380,12 @@ def _gateway_jsonrpc(payload: Dict[str, Any], user_token: str, call_id: str | No
         raise
 
 
+@retry(
+    retry=retry_if_exception_type((requests.exceptions.RequestException, requests.exceptions.Timeout)),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=4),
+    reraise=True,
+)
 def _request_json(
     method: str,
     path: str,
@@ -125,9 +393,19 @@ def _request_json(
     *,
     params: Dict[str, Any] | None = None,
     payload: Dict[str, Any] | None = None,
-    timeout: int = 15,
+    timeout: int | None = None,
 ) -> Dict[str, Any]:
-    response = requests.request(
+    """Make HTTP request to Backend API with connection pooling and retry logic.
+    
+    Retries up to 3 times with exponential backoff (1s, 2s, 4s) for:
+    - Network errors (ConnectionError, Timeout)
+    - 5xx server errors
+    """
+    if timeout is None:
+        timeout = BACKEND_TIMEOUT_SECONDS
+    
+    session = _get_backend_session()
+    response = session.request(
         method=method,
         url=f"{BACKEND_API_BASE}{path}",
         headers=_auth_headers(user_token),
@@ -748,79 +1026,49 @@ def decision_what_if(user_token: str, payload: Dict[str, Any]) -> Dict[str, Any]
     )
 
 
-def _parse_kb_content(content: Any) -> Dict[str, Any]:
-    context_text = ""
-    sources: list[Dict[str, Any]] = []
-    if not isinstance(content, list):
-        return {"context": context_text, "matches": sources}
-    for item in content:
-        text = item.get("text", "") if isinstance(item, dict) else ""
-        if text.startswith("Context:"):
-            context_text = text.replace("Context:", "", 1).strip()
-        if text.startswith("RAG Sources:"):
-            raw = text.replace("RAG Sources:", "", 1).strip()
-            try:
-                parsed = json.loads(raw)
-                if isinstance(parsed, list):
-                    sources = parsed
-            except json.JSONDecodeError:
-                pass
-    matches = []
-    for src in sources:
-        matches.append(
-            {
-                "id": src.get("id", ""),
-                "text": src.get("snippet", ""),
-                "citation": src.get("fileName") or src.get("id") or "KB",
-                "score": src.get("score", 0),
-            }
-        )
-    return {"context": context_text, "matches": matches}
+# DEPRECATED: These functions are no longer used with local KB implementation
+# def _parse_kb_content(content: Any) -> Dict[str, Any]:
+#     """DEPRECATED: Was used to parse Bedrock KB API responses. Local KB uses direct markdown parsing."""
+#     pass
+#
+# def _resolve_kb_tool_name(user_token: str) -> str:
+#     """DEPRECATED: Was used to resolve KB tool name from Gateway. Local KB doesn't use Gateway."""
+#     pass
 
 
-def _resolve_kb_tool_name(user_token: str) -> str:
-    if AGENTCORE_GATEWAY_TOOL_NAME:
-        return AGENTCORE_GATEWAY_TOOL_NAME
-    try:
-        return _resolve_tool_name("retrieve_from_aws_kb", user_token)
-    except Exception:
-        return "retrieve_from_aws_kb"
-
-
-def kb_retrieve(query: str, filters: Dict[str, str], user_token: str = "", trace_id: str | None = None) -> Dict[str, Any]:
-    if not BEDROCK_KB_ID:
-        return {"matches": [], "note": "KB not configured"}
-    if not AGENTCORE_GATEWAY_ENDPOINT:
-        return {"matches": [], "note": "Gateway not configured"}
+def kb_retrieve(query: str, filters: Dict[str, str], user_token: str = "", trace_id: str | None = None, intent: str = "") -> Dict[str, Any]:
+    """Retrieve relevant Knowledge Base content using local in-memory KB.
     
-    call_id = str(uuid.uuid4())
-    tool_name = _resolve_kb_tool_name(user_token)
-    payload = {
-        "jsonrpc": "2.0",
-        "id": call_id,
-        "method": "tools/call",
-        "params": {
-            "name": tool_name,
-            "arguments": {"query": query, "knowledgeBaseId": BEDROCK_KB_ID, "n": 3},
-        },
-    }
+    This replaces the expensive OpenSearch/Bedrock KB with local static file loading.
+    For a corpus of 8 small markdown files (~5-10KB), this eliminates $700-1000/month in costs.
     
+    Args:
+        query: Search query (may include intent hints from _build_kb_query)
+        filters: Document type filters
+        user_token: User authorization token (unused in local KB)
+        trace_id: Trace ID for logging
+        intent: User intent key for intent-based filtering
+    
+    Returns:
+        Dict with keys: context (str), matches (list), filters (dict)
+    """
     logger.info(
-        "KB retrieve: query=%s call_id=%s trace_id=%s",
+        "KB retrieve (local): query=%s intent=%s trace_id=%s",
         query[:50] + "..." if len(query) > 50 else query,
-        call_id,
+        intent,
         trace_id,
     )
     
-    try:
-        data = _gateway_jsonrpc(payload, user_token, call_id=call_id)
-        content = (data.get("result") or {}).get("content", [])
-        parsed = _parse_kb_content(content)
-        parsed["filters"] = filters
-        return parsed
-    except Exception as exc:
-        logger.warning("KB retrieve failed: call_id=%s trace_id=%s error=%s", call_id, trace_id, exc)
-        return {"matches": [], "note": f"Gateway call failed: {exc}"}
+    # Use local KB matcher
+    result = _match_kb_content_local(query, intent, filters)
+    
+    logger.info(
+        "KB retrieve (local) result: %d matches, context_length=%d",
+        len(result.get("matches", [])),
+        len(result.get("context", "")),
+    )
+    
+    return result
 
 
 def goals_get_set(user_token: str, payload: Dict[str, Any]) -> Dict[str, Any]:

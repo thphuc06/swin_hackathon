@@ -5,4 +5,4 @@ requests==2.32.3
 bedrock-agentcore==1.2.0
 python-dotenv==1.0.1
 jsonschema==4.23.0
-tenacity==9.0.0
+tenacity==8.5.0

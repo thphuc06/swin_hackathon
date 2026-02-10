@@ -6,15 +6,39 @@ import re
 from typing import Any, Dict
 
 import boto3
+from botocore.config import Config
 from pydantic import ValidationError
 
-from config import AWS_REGION, BEDROCK_MODEL_ID
+from config import AWS_REGION, BEDROCK_CONNECT_TIMEOUT, BEDROCK_MODEL_ID, BEDROCK_READ_TIMEOUT
 
 from .contracts import IntentExtractionV1
 from .schemas import validate_intent_extraction_payload
 
 logger = logging.getLogger(__name__)
 PROMPT_VERSION = "intent_extractor_v1"
+
+# Boto3 client cache with timeout config
+_bedrock_client = None
+
+def _get_bedrock_client():
+    global _bedrock_client
+    if _bedrock_client is None:
+        config = Config(
+            connect_timeout=BEDROCK_CONNECT_TIMEOUT,
+            read_timeout=BEDROCK_READ_TIMEOUT,
+            retries={'max_attempts': 2, 'mode': 'adaptive'}
+        )
+        _bedrock_client = boto3.client(
+            "bedrock-runtime",
+            region_name=AWS_REGION,
+            config=config
+        )
+        logger.info(
+            "Initialized Bedrock client with timeout config (connect=%ds, read=%ds)",
+            BEDROCK_CONNECT_TIMEOUT,
+            BEDROCK_READ_TIMEOUT,
+        )
+    return _bedrock_client
 
 
 def _build_prompt(user_prompt: str) -> str:
@@ -84,7 +108,8 @@ def _try_parse_json(raw_text: str) -> Dict[str, Any] | None:
 
 
 def _invoke_bedrock_converse(prompt: str, *, model_id: str) -> str:
-    client = boto3.client("bedrock-runtime", region_name=AWS_REGION)
+    client = _get_bedrock_client()
+    logger.debug("Invoking Bedrock converse for intent extraction (model=%s)", model_id)
     response = client.converse(
         modelId=model_id,
         messages=[{"role": "user", "content": [{"text": prompt}]}],

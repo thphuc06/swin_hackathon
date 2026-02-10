@@ -5,6 +5,7 @@ import re
 import time
 import unicodedata
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, TypedDict
 
 from dotenv import load_dotenv
@@ -28,6 +29,7 @@ from config import (
     ROUTER_POLICY_VERSION,
     ROUTER_SCENARIO_CONF_MIN,
     ROUTER_TOP2_GAP_MIN,
+    TOOL_EXECUTION_TIMEOUT,
 )
 from encoding import apply_prompt_encoding_gate
 from router import (
@@ -1355,8 +1357,110 @@ def retrieve_kb(state: AgentState) -> AgentState:
         state["kb"] = {"matches": [], "note": "clarification_pending"}
         return state
     query = _build_kb_query(state.get("prompt", ""), state.get("intent", ""))
-    state["kb"] = kb_retrieve(query, {"doc_type": "policy"}, state["user_token"], trace_id=state.get("trace_id"))
+    intent = state.get("intent", "")
+    state["kb"] = kb_retrieve(query, {"doc_type": "policy"}, state["user_token"], trace_id=state.get("trace_id"), intent=intent)
     return state
+
+
+def _execute_tool_safe(tool_name: str, state: AgentState, extraction_slots: Dict[str, Any]) -> tuple[str, Dict[str, Any] | Exception]:
+    """Execute a single tool with error handling. Returns (tool_name, result_or_exception)."""
+    try:
+        if tool_name == "suitability_guard_v1":
+            # Skip - executed in dedicated suitability node
+            return tool_name, {"skipped": True}
+        if tool_name == "spend_analytics_v1":
+            range_days = _resolve_summary_range(state.get("prompt", ""), state.get("intent", "summary"))
+            result = spend_analytics(
+                state["user_token"],
+                user_id=state["user_id"],
+                range_days=range_days,
+                trace_id=state["trace_id"],
+            )
+            return tool_name, result
+
+        if tool_name == "cashflow_forecast_v1":
+            horizon_hint = _safe_int(extraction_slots.get("horizon_months"), 0)
+            horizon = "daily_30" if horizon_hint == 1 else "weekly_12"
+            result = cashflow_forecast_tool(
+                state["user_token"],
+                user_id=state["user_id"],
+                horizon=horizon,
+                trace_id=state["trace_id"],
+            )
+            return tool_name, result
+
+        if tool_name == "anomaly_signals_v1":
+            lookback_days = _safe_int(extraction_slots.get("lookback_days"), 90)
+            result = anomaly_signals(
+                state["user_token"],
+                user_id=state["user_id"],
+                lookback_days=max(30, min(365, lookback_days or 90)),
+                trace_id=state["trace_id"],
+            )
+            return tool_name, result
+
+        if tool_name == "risk_profile_non_investment_v1":
+            lookback_days = _safe_int(extraction_slots.get("lookback_days"), 180)
+            result = risk_profile_non_investment_tool(
+                state["user_token"],
+                user_id=state["user_id"],
+                lookback_days=max(60, min(720, lookback_days or 180)),
+                trace_id=state["trace_id"],
+            )
+            return tool_name, result
+
+        if tool_name == "recurring_cashflow_detect_v1":
+            result = recurring_cashflow_detect_tool(
+                state["user_token"],
+                user_id=state["user_id"],
+                lookback_months=max(3, min(24, _safe_int(extraction_slots.get("lookback_months"), 6) or 6)),
+                min_occurrence_months=max(
+                    2,
+                    min(12, _safe_int(extraction_slots.get("min_occurrence_months"), 3) or 3),
+                ),
+                trace_id=state["trace_id"],
+            )
+            return tool_name, result
+
+        if tool_name == "goal_feasibility_v1":
+            goal_request = _goal_request_from_slots(extraction_slots, state.get("prompt", ""))
+            result = goal_feasibility_tool(
+                state["user_token"],
+                user_id=state["user_id"],
+                target_amount=goal_request.get("target_amount"),
+                horizon_months=goal_request.get("horizon_months") or 12,
+                trace_id=state["trace_id"],
+            )
+            return tool_name, result
+
+        if tool_name == "jar_allocation_suggest_v1":
+            result = jar_allocation_suggest_tool(
+                state["user_token"],
+                user_id=state["user_id"],
+                trace_id=state["trace_id"],
+            )
+            return tool_name, result
+
+        if tool_name == "what_if_scenario_v1":
+            scenario_request = state.get("scenario_request", {})
+            if not isinstance(scenario_request, dict) or not scenario_request:
+                scenario_request = _build_scenario_request_from_slots(extraction_slots, {})
+            result = what_if_scenario_tool(
+                state["user_token"],
+                user_id=state["user_id"],
+                horizon_months=max(1, min(24, _safe_int(scenario_request.get("horizon_months"), 12) or 12)),
+                seasonality=bool(scenario_request.get("seasonality", True)),
+                goal=str(scenario_request.get("goal") or "maximize_savings"),
+                base_scenario_overrides=scenario_request.get("base_scenario_overrides") or {},
+                variants=scenario_request.get("variants") or [],
+                trace_id=state["trace_id"],
+            )
+            return tool_name, result
+        
+        return tool_name, {"error": f"Unknown tool: {tool_name}"}
+    except Exception as exc:
+        logger.warning("Tool execution failed: tool=%s error=%s", tool_name, exc)
+        return tool_name, exc
 
 
 def decision_engine(state: AgentState) -> AgentState:
@@ -1377,115 +1481,39 @@ def decision_engine(state: AgentState) -> AgentState:
         if isinstance(slots, dict):
             extraction_slots = slots
 
-    for tool_name in tool_bundle:
-        if tool_name == "suitability_guard_v1":
-            # Executed in dedicated suitability node to keep safety check early.
-            continue
-
-        try:
-            if tool_name == "spend_analytics_v1":
-                range_days = _resolve_summary_range(state.get("prompt", ""), state.get("intent", "summary"))
-                summary = spend_analytics(
-                    state["user_token"],
-                    user_id=state["user_id"],
-                    range_days=range_days,
-                    trace_id=state["trace_id"],
-                )
-                _record_tool_output(state, "spend_analytics_v1", summary)
-                continue
-
-            if tool_name == "cashflow_forecast_v1":
-                horizon_hint = _safe_int(extraction_slots.get("horizon_months"), 0)
-                horizon = "daily_30" if horizon_hint == 1 else "weekly_12"
-                forecast = cashflow_forecast_tool(
-                    state["user_token"],
-                    user_id=state["user_id"],
-                    horizon=horizon,
-                    trace_id=state["trace_id"],
-                )
-                _record_tool_output(state, "cashflow_forecast_v1", forecast)
-                continue
-
-            if tool_name == "anomaly_signals_v1":
-                lookback_days = _safe_int(extraction_slots.get("lookback_days"), 90)
-                anomaly = anomaly_signals(
-                    state["user_token"],
-                    user_id=state["user_id"],
-                    lookback_days=max(30, min(365, lookback_days or 90)),
-                    trace_id=state["trace_id"],
-                )
-                _record_tool_output(state, "anomaly_signals_v1", anomaly)
-                continue
-
-            if tool_name == "risk_profile_non_investment_v1":
-                lookback_days = _safe_int(extraction_slots.get("lookback_days"), 180)
-                risk = risk_profile_non_investment_tool(
-                    state["user_token"],
-                    user_id=state["user_id"],
-                    lookback_days=max(60, min(720, lookback_days or 180)),
-                    trace_id=state["trace_id"],
-                )
-                _record_tool_output(state, "risk_profile_non_investment_v1", risk)
-                if state.get("intent") == "invest":
-                    state["education_only"] = True
-                continue
-
-            if tool_name == "recurring_cashflow_detect_v1":
-                recurring = recurring_cashflow_detect_tool(
-                    state["user_token"],
-                    user_id=state["user_id"],
-                    lookback_months=max(3, min(24, _safe_int(extraction_slots.get("lookback_months"), 6) or 6)),
-                    min_occurrence_months=max(
-                        2,
-                        min(12, _safe_int(extraction_slots.get("min_occurrence_months"), 3) or 3),
-                    ),
-                    trace_id=state["trace_id"],
-                )
-                _record_tool_output(state, "recurring_cashflow_detect_v1", recurring)
-                continue
-
-            if tool_name == "goal_feasibility_v1":
-                goal_request = _goal_request_from_slots(extraction_slots, state.get("prompt", ""))
-                goal = goal_feasibility_tool(
-                    state["user_token"],
-                    user_id=state["user_id"],
-                    target_amount=goal_request.get("target_amount"),
-                    horizon_months=goal_request.get("horizon_months") or 12,
-                    trace_id=state["trace_id"],
-                )
-                _record_tool_output(state, "goal_feasibility_v1", goal)
-                continue
-
-            if tool_name == "jar_allocation_suggest_v1":
-                allocation = jar_allocation_suggest_tool(
-                    state["user_token"],
-                    user_id=state["user_id"],
-                    trace_id=state["trace_id"],
-                )
-                _record_tool_output(state, "jar_allocation_suggest_v1", allocation)
-                continue
-
-            if tool_name == "what_if_scenario_v1":
-                scenario_request = state.get("scenario_request", {})
-                if not isinstance(scenario_request, dict) or not scenario_request:
-                    scenario_request = _build_scenario_request_from_slots(extraction_slots, {})
-                    state["scenario_request"] = scenario_request
-                scenario = what_if_scenario_tool(
-                    state["user_token"],
-                    user_id=state["user_id"],
-                    horizon_months=max(1, min(24, _safe_int(scenario_request.get("horizon_months"), 12) or 12)),
-                    seasonality=bool(scenario_request.get("seasonality", True)),
-                    goal=str(scenario_request.get("goal") or "maximize_savings"),
-                    base_scenario_overrides=scenario_request.get("base_scenario_overrides") or {},
-                    variants=scenario_request.get("variants") or [],
-                    trace_id=state["trace_id"],
-                )
-                _record_tool_output(state, "what_if_scenario_v1", scenario)
-                state["tool_outputs"]["scenario_request"] = scenario_request
-                continue
-        except Exception as exc:  # pragma: no cover - runtime/network path
-            _record_tool_error(state, tool_name, exc)
-            continue
+    # Filter out suitability_guard (executed earlier)
+    tools_to_execute = [t for t in tool_bundle if t != "suitability_guard_v1"]
+    
+    # Execute tools in parallel for better performance
+    logger.info("Executing %d tools in parallel: %s", len(tools_to_execute), tools_to_execute)
+    with ThreadPoolExecutor(max_workers=min(5, len(tools_to_execute) or 1)) as executor:
+        future_to_tool = {
+            executor.submit(_execute_tool_safe, tool_name, state, extraction_slots): tool_name
+            for tool_name in tools_to_execute
+        }
+        
+        # Use centralized timeout config, remove per-task timeout (requests already have timeouts)
+        for future in as_completed(future_to_tool, timeout=TOOL_EXECUTION_TIMEOUT):
+            tool_name = future_to_tool[future]
+            try:
+                result_tool_name, result = future.result()  # No timeout here - requests handle individual timeouts
+                if isinstance(result, Exception):
+                    _record_tool_error(state, result_tool_name, result)
+                elif isinstance(result, dict) and result.get("skipped"):
+                    continue
+                else:
+                    _record_tool_output(state, result_tool_name, result)
+                    # Special handling for some tools
+                    if result_tool_name == "risk_profile_non_investment_v1" and state.get("intent") == "invest":
+                        state["education_only"] = True
+                    if result_tool_name == "what_if_scenario_v1":
+                        scenario_request = state.get("scenario_request", {})
+                        if not isinstance(scenario_request, dict) or not scenario_request:
+                            scenario_request = _build_scenario_request_from_slots(extraction_slots, {})
+                        state["tool_outputs"]["scenario_request"] = scenario_request
+            except Exception as exc:
+                logger.warning("Failed to get tool result: tool=%s error=%s", tool_name, exc)
+                _record_tool_error(state, tool_name, exc)
 
     state["context"] = {
         "summary": state.get("tool_outputs", {}).get("spend_analytics_v1", {}),
