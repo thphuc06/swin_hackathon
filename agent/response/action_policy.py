@@ -116,6 +116,33 @@ def build_action_candidates(
             params={"recheck_weeks": 4},
             supporting_insight_ids=["insight.goal_gap"],
         )
+    if "insight.goal_input_missing" in insight_ids:
+        _add_action(
+            candidates,
+            seen,
+            action_id="capture_goal_input",
+            priority=9,
+            action_type="advisor_question",
+            params={
+                "question": "Ban muon dat muc tieu bao nhieu va trong bao lau?",
+                "fields": ["target_amount_vnd", "horizon_months"],
+            },
+            supporting_insight_ids=["insight.goal_input_missing"],
+        )
+
+    if "insight.jar_data_missing" in insight_ids:
+        _add_action(
+            candidates,
+            seen,
+            action_id="capture_jar_setup",
+            priority=16,
+            action_type="advisor_question",
+            params={
+                "question": "Ban chua co cau hinh vi chi tieu. Ban muon tao cac jar co ban (Bills/Emergency/Goals/Living/Misc) khong?",
+                "options": ["co", "khong"],
+            },
+            supporting_insight_ids=["insight.jar_data_missing"],
+        )
 
     if "insight.scenario_upside" in insight_ids:
         _add_action(

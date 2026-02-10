@@ -100,12 +100,71 @@ def goal_feasibility(
     txns = fetch_transactions_in_window(sql, user_id=user_id, start_at=start_dt, end_at=as_of_dt)
     goals = fetch_goals(sql, user_id)
 
-    resolved = _resolve_goal_target(
-        goals=goals,
-        goal_id=goal_id,
-        target_amount=target_amount,
-        horizon_months=horizon_months,
-    )
+    try:
+        resolved = _resolve_goal_target(
+            goals=goals,
+            goal_id=goal_id,
+            target_amount=target_amount,
+            horizon_months=horizon_months,
+        )
+    except ValueError as exc:
+        requested_target = safe_float(target_amount) if target_amount is not None else None
+        requested_horizon = int(safe_float(horizon_months, 0)) if horizon_months is not None else None
+        tool_input = {
+            "user_id": user_id,
+            "target_amount": requested_target,
+            "horizon_months": requested_horizon,
+            "goal_id": goal_id,
+            "seasonality": parse_bool(seasonality),
+            "as_of": iso_utc(as_of_dt),
+        }
+        payload = {
+            "status": "insufficient_input",
+            "reason_codes": ["missing_goal_target"],
+            "message": str(exc),
+            "goal_source": "none",
+            "goal_id": goal_id,
+            "goal_name": "unresolved_goal",
+            "target_amount": round(safe_float(requested_target), 2) if requested_target else 0.0,
+            "horizon_months": requested_horizon if requested_horizon and requested_horizon > 0 else None,
+            "required_monthly_saving": 0.0,
+            "feasible": False,
+            "gap_amount": 0.0,
+            "grade": "N/A",
+            "reasons": ["Provide target_amount or create a goal before requesting feasibility."],
+            "metrics": {},
+            "forecast_summary": {
+                "base_total_net_p50": 0.0,
+                "history_days": 0,
+                "forecast_points": 0,
+            },
+        }
+        result = build_output(
+            tool_name=TOOL_NAME,
+            tool_input=tool_input,
+            payload=payload,
+            trace_id=trace,
+            started_at=started_at,
+            sql_snapshot_ts=iso_utc(),
+        )
+        write_audit_event(
+            sql,
+            user_id=user_id,
+            trace_id=trace,
+            event_type=TOOL_NAME,
+            payload={
+                "params": {
+                    "goal_id": goal_id,
+                    "target_amount": requested_target,
+                    "horizon_months": requested_horizon,
+                },
+                "result": {
+                    "status": "insufficient_input",
+                    "reason_codes": ["missing_goal_target"],
+                },
+            },
+        )
+        return result
 
     txn_agg_daily = build_txn_agg_daily(_txn_daily_input(txns))
     forecast = forecast_cashflow_core(

@@ -89,7 +89,12 @@ if ($anomalyRes.error) {
 $anomaly = Parse-ToolContent -Response $anomalyRes
 Write-Host "[INFO] anomaly river available=$($anomaly.external_engines.river_adwin.available)"
 Write-Host "[INFO] anomaly pyod available=$($anomaly.external_engines.pyod_ecod.available)"
-Write-Host "[INFO] anomaly kats available=$($anomaly.external_engines.kats_cusum.available)"
+$ruptures = $anomaly.external_engines.ruptures_pelt
+$firstChangePoint = $null
+if ($ruptures -and $ruptures.change_points -and $ruptures.change_points.Count -gt 0) {
+    $firstChangePoint = $ruptures.change_points[0]
+}
+Write-Host "[INFO] anomaly ruptures available=$($ruptures.available) ready=$($ruptures.ready) change_detected=$($ruptures.change_detected) first_change_point=$firstChangePoint"
 
 $recurringRes = Invoke-Mcp -Method "tools/call" -Params @{
     name = "recurring_cashflow_detect_v1"

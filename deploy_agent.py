@@ -1,129 +1,121 @@
-import subprocess
+from __future__ import annotations
+
 import os
+import subprocess
 import sys
+from urllib.parse import urlparse
 
-def generate_token():
-    print("Generating token...")
-    try:
-        # Run genToken.py located in agent/ directory
-        # Ensure we run from root and point to agent/genToken.py
-        result = subprocess.run(
-            ["python", "agent/genToken.py"], 
-            capture_output=True, 
-            text=True, 
-            encoding='utf-8',
-            check=True
+
+def _normalize_gateway_endpoint(value: str) -> str:
+    endpoint = (value or "").strip().rstrip("/")
+    if not endpoint:
+        return ""
+    if endpoint.endswith("/mcp"):
+        return endpoint
+    return f"{endpoint}/mcp"
+
+
+def _mask_value(key: str, value: str) -> str:
+    lowered = key.lower()
+    if any(token in lowered for token in ["secret", "password", "token", "key"]):
+        return "***"
+    return value
+
+
+def _ensure_backend_base(value: str) -> str:
+    backend = (value or "").strip()
+    if not backend:
+        raise ValueError("DEPLOY_BACKEND_API_BASE is required and must be a cloud URL.")
+    parsed = urlparse(backend)
+    host = (parsed.hostname or "").strip().lower()
+    if host in {"localhost", "127.0.0.1"}:
+        raise ValueError("DEPLOY_BACKEND_API_BASE cannot point to localhost for cloud deploy.")
+    if not parsed.scheme.startswith("http"):
+        raise ValueError("DEPLOY_BACKEND_API_BASE must start with http:// or https://")
+    return backend.rstrip("/")
+
+
+def _build_env_vars() -> dict[str, str]:
+    gateway_endpoint = _normalize_gateway_endpoint(
+        os.getenv(
+            "DEPLOY_AGENTCORE_GATEWAY_ENDPOINT",
+            "https://jars-gw-afejhtqoqd.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp",
         )
-        for line in result.stdout.splitlines():
-            if "AccessToken:" in line:
-                return line.split("AccessToken:")[1].strip()
-        print("Could not find AccessToken in output.")
-        return None
-    except subprocess.CalledProcessError as e:
-        print(f"Error generating token: {e}")
-        print(e.stderr)
-        return None
-
-def deploy():
-    token = generate_token()
-    if not token:
-        print("Failed to generate token. Aborting deployment.")
-        sys.exit(1)
-    
-    print(f"Token generated (len={len(token)})")
-    
-    # Environment variables from user request + generated token
-    env_vars = {
-        "AWS_REGION": "us-east-1",
-        "BEDROCK_MODEL_ID": "amazon.nova-pro-v1:0",
-        "BEDROCK_GUARDRAIL_ID": "arn:aws:bedrock:us-east-1:021862553142:guardrail-profile/us.guardrail.v1:0",
-        "BEDROCK_GUARDRAIL_VERSION": "DRAFT",
-        "BEDROCK_KB_ID": "G6GLWTUKEL",
-        "BEDROCK_KB_DATASOURCE_ID": "WTYVWINQP9",
-        "AGENTCORE_GATEWAY_ENDPOINT": "https://jars-gw-afejhtqoqd.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp",
-        "BACKEND_API_BASE": "http://localhost:8010",
+    )
+    backend_api_base = _ensure_backend_base(os.getenv("DEPLOY_BACKEND_API_BASE", ""))
+    model_id = os.getenv("DEPLOY_BEDROCK_MODEL_ID", "amazon.nova-pro-v1:0").strip()
+    return {
+        "AWS_REGION": os.getenv("DEPLOY_AWS_REGION", "us-east-1").strip() or "us-east-1",
+        "BEDROCK_MODEL_ID": model_id,
+        "BEDROCK_GUARDRAIL_ID": os.getenv(
+            "DEPLOY_BEDROCK_GUARDRAIL_ID",
+            "arn:aws:bedrock:us-east-1:021862553142:guardrail-profile/us.guardrail.v1:0",
+        ).strip(),
+        "BEDROCK_GUARDRAIL_VERSION": os.getenv("DEPLOY_BEDROCK_GUARDRAIL_VERSION", "DRAFT").strip() or "DRAFT",
+        "BEDROCK_KB_ID": os.getenv("DEPLOY_BEDROCK_KB_ID", "G6GLWTUKEL").strip(),
+        "BEDROCK_KB_DATASOURCE_ID": os.getenv("DEPLOY_BEDROCK_KB_DATASOURCE_ID", "WTYVWINQP9").strip(),
+        "AGENTCORE_GATEWAY_ENDPOINT": gateway_endpoint,
+        "BACKEND_API_BASE": backend_api_base,
         "USE_LOCAL_MOCKS": "false",
-        "LOG_LEVEL": "info",
-        "DEFAULT_USER_TOKEN": token,
-        
-        # Router Configuration
+        "LOG_LEVEL": os.getenv("DEPLOY_LOG_LEVEL", "info").strip() or "info",
         "ROUTER_MODE": "semantic_enforce",
-        "ROUTER_POLICY_VERSION": "v1",
-        "ROUTER_INTENT_CONF_MIN": "0.70",
-        "ROUTER_TOP2_GAP_MIN": "0.15",
-        "ROUTER_SCENARIO_CONF_MIN": "0.75",
-        "ROUTER_MAX_CLARIFY_QUESTIONS": "2",
-        
-        # Response Configuration
-        "RESPONSE_MODE": "llm_enforce", # User pasted llm_shadow but README/Prev config says llm_enforce for prod. I will stick to llm_enforce as it is 'Optimized'.
-                                        # Actually, better to stick to the sophisticated config. I will use llm_enforce as per previous .env to ensure it actually works as a smart agent. 
-                                        # Wait, user SPECIFICALLY asked about that block. 
-                                        # I'll use llm_enforce because the goal is "AgentCore Advisory (MVP)" and shadow usually means "run but don't use". 
-                                        # If I use shadow, it might default to template. 
-                                        # I'll update the comment.
-        "RESPONSE_PROMPT_VERSION": "answer_synth_v2",
-        "RESPONSE_SCHEMA_VERSION": "answer_plan_v2",
-        "RESPONSE_POLICY_VERSION": "advice_policy_v1",
-        "RESPONSE_MAX_RETRIES": "1",
-        
-        # Encoding Gate
-        "ENCODING_GATE_ENABLED": "true",
-        "ENCODING_REPAIR_ENABLED": "true",
-        "ENCODING_REPAIR_SCORE_MIN": "0.12",
-        "ENCODING_FAILFAST_SCORE_MIN": "0.45",
-        "ENCODING_REPAIR_MIN_DELTA": "0.10",
-        "ENCODING_NORMALIZATION_FORM": "NFC"
+        "ROUTER_POLICY_VERSION": os.getenv("DEPLOY_ROUTER_POLICY_VERSION", "v1").strip() or "v1",
+        "ROUTER_INTENT_CONF_MIN": os.getenv("DEPLOY_ROUTER_INTENT_CONF_MIN", "0.70").strip() or "0.70",
+        "ROUTER_TOP2_GAP_MIN": os.getenv("DEPLOY_ROUTER_TOP2_GAP_MIN", "0.15").strip() or "0.15",
+        "ROUTER_SCENARIO_CONF_MIN": os.getenv("DEPLOY_ROUTER_SCENARIO_CONF_MIN", "0.75").strip() or "0.75",
+        "ROUTER_MAX_CLARIFY_QUESTIONS": os.getenv("DEPLOY_ROUTER_MAX_CLARIFY_QUESTIONS", "2").strip() or "2",
+        "RESPONSE_MODE": "llm_enforce",
+        "RESPONSE_PROMPT_VERSION": os.getenv("DEPLOY_RESPONSE_PROMPT_VERSION", "answer_synth_v2").strip()
+        or "answer_synth_v2",
+        "RESPONSE_SCHEMA_VERSION": os.getenv("DEPLOY_RESPONSE_SCHEMA_VERSION", "answer_plan_v2").strip()
+        or "answer_plan_v2",
+        "RESPONSE_POLICY_VERSION": os.getenv("DEPLOY_RESPONSE_POLICY_VERSION", "advice_policy_v1").strip()
+        or "advice_policy_v1",
+        "RESPONSE_MAX_RETRIES": os.getenv("DEPLOY_RESPONSE_MAX_RETRIES", "2").strip() or "2",
+        "ENCODING_GATE_ENABLED": os.getenv("DEPLOY_ENCODING_GATE_ENABLED", "true").strip() or "true",
+        "ENCODING_REPAIR_ENABLED": os.getenv("DEPLOY_ENCODING_REPAIR_ENABLED", "true").strip() or "true",
+        "ENCODING_REPAIR_SCORE_MIN": os.getenv("DEPLOY_ENCODING_REPAIR_SCORE_MIN", "0.12").strip() or "0.12",
+        "ENCODING_FAILFAST_SCORE_MIN": os.getenv("DEPLOY_ENCODING_FAILFAST_SCORE_MIN", "0.45").strip() or "0.45",
+        "ENCODING_REPAIR_MIN_DELTA": os.getenv("DEPLOY_ENCODING_REPAIR_MIN_DELTA", "0.10").strip() or "0.10",
+        "ENCODING_NORMALIZATION_FORM": os.getenv("DEPLOY_ENCODING_NORMALIZATION_FORM", "NFC").strip() or "NFC",
     }
-    
-    # Construct command
-    # agentcore deploy --auto-update-on-conflict --env KEY=VAL --env KEY2=VAL2 ...
+
+
+def deploy() -> None:
+    env_vars = _build_env_vars()
+
+    print("Effective deploy env summary:")
+    for key in sorted(env_vars.keys()):
+        print(f"- {key}={_mask_value(key, env_vars[key])}")
+
     cmd = ["agentcore", "deploy", "--auto-update-on-conflict"]
-    
     for key, val in env_vars.items():
         cmd.extend(["--env", f"{key}={val}"])
-        
-    print("\nExecuting deployment command...")
-    print(" ".join(cmd[:3]) + " ... (env vars hidden)")
 
-    # Execute from agent/ directory because agentcore expects to be in the agent dir (usually)
-    # The README says: "cd agent; agentcore deploy ..."
-    # So we must run from agent/ directory.
-    
-    try:
-        # Pass current env + PYTHONIOENCODING to avoid charmap errors in child process
-        process_env = os.environ.copy()
-        process_env["PYTHONIOENCODING"] = "utf-8"
-        process_env["PYTHONLEGACYWINDOWSSTDIO"] = "utf-8"
-        
-        proc = subprocess.Popen(
-            cmd,
-            cwd="agent",
-            env=process_env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            # text=True,  # Disable text mode to handle encoding errors manually
-            # encoding='utf-8'
-        )
-        
-        # Stream output safely
-        for line_bytes in proc.stdout:
-            try:
-                line = line_bytes.decode('utf-8', errors='replace')
-            except:
-                line = str(line_bytes)
-            print(line, end="")
-            
-        proc.wait()
-        
-        if proc.returncode != 0:
-            print(f"Deployment failed with exit code {proc.returncode}")
-            sys.exit(proc.returncode)
-            
-        print("\nDeployment completed successfully!")
-        
-    except Exception as e:
-        print(f"Deployment execution failed: {e}")
-        sys.exit(1)
+    process_env = os.environ.copy()
+    process_env["PYTHONIOENCODING"] = "utf-8"
+
+    print("\nExecuting agentcore deploy from ./agent ...")
+    proc = subprocess.Popen(
+        cmd,
+        cwd="agent",
+        env=process_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    assert proc.stdout is not None
+    for line_bytes in proc.stdout:
+        line = line_bytes.decode("utf-8", errors="replace")
+        print(line, end="")
+    proc.wait()
+    if proc.returncode != 0:
+        raise RuntimeError(f"Deployment failed with exit code {proc.returncode}")
+    print("\nDeployment completed successfully.")
+
 
 if __name__ == "__main__":
-    deploy()
+    try:
+        deploy()
+    except Exception as exc:
+        print(f"Deployment failed: {exc}")
+        sys.exit(1)

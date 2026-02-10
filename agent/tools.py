@@ -574,9 +574,15 @@ def _call_gateway_tool(
         Parsed tool output as dict
     """
     call_id = call_id or str(uuid.uuid4())
-    
+
+    # Resolve name first so lazy-loading can populate tool schema cache.
+    resolved_name = _resolve_tool_name(base_name, user_token)
+
+    # Sanitize first: optional None fields should be dropped before schema validation.
+    sanitized_arguments = _drop_none(arguments)
+
     # Client-side JSON Schema validation (fail fast)
-    is_valid, validation_errors = _validate_tool_arguments(base_name, arguments)
+    is_valid, validation_errors = _validate_tool_arguments(base_name, sanitized_arguments)
     if not is_valid:
         error_msg = f"Invalid arguments for {base_name}: {'; '.join(validation_errors)}"
         logger.warning(
@@ -587,10 +593,7 @@ def _call_gateway_tool(
             validation_errors,
         )
         raise ValueError(error_msg)
-    
-    resolved_name = _resolve_tool_name(base_name, user_token)
-    sanitized_arguments = _drop_none(arguments)
-    
+
     payload = {
         "jsonrpc": "2.0",
         "id": call_id,

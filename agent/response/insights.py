@@ -58,11 +58,14 @@ def build_insights_from_facts(
     net_fact = _find_first(facts, "spend.net_cashflow.")
     runway_fact = _find_first(facts, "risk.runway_months.")
     anomaly_count_fact = _find_first(facts, "anomaly.flags_count.")
+    anomaly_latest_date_fact = _find_exact(facts, "anomaly.latest_change_point.90d")
     volatility_fact = _find_first(facts, "risk.cashflow_volatility.")
     overspend_fact = _find_first(facts, "risk.overspend_propensity.")
     goal_gap_fact = _find_first(facts, "goal.gap_amount")
     goal_feasible_fact = _find_first(facts, "goal.feasible")
+    goal_status_fact = _find_exact(facts, "goal.status")
     jar_ratio_fact = _find_first(facts, "jar.top.ratio")
+    jar_status_fact = _find_exact(facts, "jar.status")
     scenario_delta_fact = _find_first(facts, "scenario.best_variant.delta")
     scenario_best_variant_fact = _find_first(facts, "scenario.best_variant.name")
     service_savings_fact = _find_exact(facts, "kb.service_category.savings_deposit")
@@ -118,19 +121,50 @@ def build_insights_from_facts(
     anomaly_support: list[str] = []
     if anomaly_count_fact and anomaly_count >= 1:
         anomaly_support.append(anomaly_count_fact.fact_id)
+    if anomaly_latest_date_fact and str(anomaly_latest_date_fact.value_text).strip():
+        anomaly_support.append(anomaly_latest_date_fact.fact_id)
     if volatility_fact and abs(volatility_value) >= 0.35:
         anomaly_support.append(volatility_fact.fact_id)
     if overspend_fact and abs(overspend_value) >= 0.30:
         anomaly_support.append(overspend_fact.fact_id)
     if anomaly_support:
+        latest_date = str(anomaly_latest_date_fact.value_text).strip() if anomaly_latest_date_fact else ""
+        if latest_date:
+            anomaly_seed = f"Phat hien bien dong chi tieu bat thuong, moc gan nhat {latest_date}."
+        else:
+            anomaly_seed = "Phat hien dau hieu bien dong chi tieu bat thuong."
         _add_insight(
             insights,
             seen,
             insight_id="insight.spend_anomaly",
             kind="risk",
             severity="high" if anomaly_count >= 2 else "medium",
-            message_seed="PhÃ¡t hiá»‡n dáº¥u hiá»‡u biáº¿n Ä‘á»™ng chi tiÃªu báº¥t thÆ°á»ng.",
+            message_seed=anomaly_seed,
             supporting_fact_ids=anomaly_support,
+        )
+
+    goal_status_value = str(goal_status_fact.value if goal_status_fact else "").strip().lower()
+    if goal_status_fact and goal_status_value.startswith("insufficient_"):
+        _add_insight(
+            insights,
+            seen,
+            insight_id="insight.goal_input_missing",
+            kind="planning",
+            severity="high",
+            message_seed="Thieu thong tin muc tieu de danh gia kha thi, can bo sung so tien muc tieu hoac ky han.",
+            supporting_fact_ids=[goal_status_fact.fact_id],
+        )
+
+    jar_status_value = str(jar_status_fact.value if jar_status_fact else "").strip().lower()
+    if jar_status_fact and jar_status_value.startswith("insufficient_"):
+        _add_insight(
+            insights,
+            seen,
+            insight_id="insight.jar_data_missing",
+            kind="planning",
+            severity="medium",
+            message_seed="Thieu du lieu jar de de xuat phan bo, can hoan tat thiet lap vi ngan sach.",
+            supporting_fact_ids=[jar_status_fact.fact_id],
         )
 
     if goal_feasible_fact and str(goal_feasible_fact.value_text).strip().lower() in {"chua kha thi", "false"}:

@@ -59,13 +59,16 @@ def suitability_guard(
     intent_norm = (intent or "").strip().lower()
     prompt_text = prompt or ""
 
-    invest_like = _contains_invest_intent(intent_norm) or _contains_invest_intent(prompt_text)
+    prompt_invest_like = _contains_invest_intent(prompt_text)
+    action_invest_like = action in EXECUTION_ACTIONS or action in RECOMMENDATION_ACTIONS
+    intent_invest_like = _contains_invest_intent(intent_norm)
     recommendation_hint = bool(
         re.search(
             r"\b(co nen|nen|should i|is it a good time to)\s*(mua|ban|buy|sell)\b",
             _normalize_text(prompt_text),
         )
     )
+    invest_like = prompt_invest_like or action_invest_like or (intent_invest_like and recommendation_hint)
     is_execution = action in EXECUTION_ACTIONS
     is_recommendation = action in RECOMMENDATION_ACTIONS or recommendation_hint
 

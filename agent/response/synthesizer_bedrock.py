@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 PROMPT_VERSION = "answer_synth_v2"
 DEFAULT_DISCLAIMER = "Educational guidance only. We do not provide investment advice."
 _FACT_PLACEHOLDER_PATTERN = re.compile(r"\[F:([a-zA-Z0-9._-]+)\]")
+_NON_FACT_PLACEHOLDER_PATTERN = re.compile(r"\[(?:A|I):[^\]]+\]")
 
 # Boto3 client cache with timeout config
 _bedrock_client = None
@@ -120,8 +121,23 @@ def _build_prompt(
         "If risk_appetite is unknown and intent is planning/scenario/invest, include one concise follow-up question "
         "asking user to choose risk appetite (thap/vua/cao) and keep guidance provisional.\n"
         "For Vietnamese output, use simple daily wording and avoid internal tool names/IDs.\n"
+        "Vietnamese terminology contract:\n"
+        "- Use exact, professional banking terms from facts.\n"
+        "- Use the exact term 'dòng tiền ròng' for net cashflow.\n"
+        "- Never use malformed variants such as 'dòng tiền rỗng' or 'dòng tiền rộng'.\n"
+        "- Use 'thu nhập', 'chi tiêu', 'khẩu vị rủi ro', 'bất thường', 'khả thi' consistently.\n"
+        "- For risk labels in Vietnamese, map low/medium/high to thấp/trung bình/cao.\n"
+        "- Do not output mixed bilingual tokens in one phrase (for example 'thấp low').\n"
+        "- Avoid duplicated adjacent values or repeated percentages in the same sentence.\n"
+        "- For each metric/count, mention the numeric value only once per sentence.\n"
+        "- Never append orphan numeric suffixes at sentence end (for example '... 1.').\n"
+        "- Do not output unaccented Vietnamese in final prose when language='vi'.\n"
+        "- Never output malformed or pseudo-Vietnamese spellings (for example 'thiềt tân', 'dềch vụ', 'têng tốc').\n"
+        "- If you produce a malformed Vietnamese phrase, rewrite it to standard Vietnamese before final JSON.\n"
+        "- If generated metric wording conflicts with fact semantics, rewrite wording to match fact meaning.\n"
         "When facts include kb.service_category.*, include at least one practical banking service suggestion in actions.\n"
         "Map service suggestion to context: savings_capacity -> savings/deposit; goal_gap or negative cashflow -> loan/credit support; spend anomaly -> card/payment control.\n"
+        "If fact anomaly.latest_change_point.90d exists and context is risk/anomaly (or user asks anomaly date/time), include it explicitly in summary_lines and key_metrics.\n"
         "Do not expose internal fact IDs, insight IDs, action IDs, or tool IDs in prose.\n"
         "When scenario best variant is base, still provide concrete next actions grounded by available facts.\n"
         "If data is missing, write it in limitations without inventing facts.\n"
@@ -291,12 +307,204 @@ def _coerce_key_metrics(value: Any) -> list[Dict[str, str]]:
     return metrics
 
 
+def _sanitize_prose_line(text: str, *, language: str) -> str:
+    line = str(text or "").strip()
+    if not line:
+        return ""
+
+    # Remove non-fact placeholders leaked by model.
+    line = _NON_FACT_PLACEHOLDER_PATTERN.sub("", line)
+
+    # Collapse obvious duplicate adjacent percentages.
+    line = re.sub(r"(\d+(?:\.\d+)?%)\s+\1", r"\1", line)
+
+    if language == "vi":
+        replacements = {
+            "Dòng tiền rỗng": "Dòng tiền ròng",
+            "dòng tiền rỗng": "dòng tiền ròng",
+            "Dòng tiền rộng": "Dòng tiền ròng",
+            "dòng tiền rộng": "dòng tiền ròng",
+            "Ngay bat thuong gan nhat la": "Ngày bất thường gần nhất là",
+            "Ban uu tien khau vi rui ro nao: thap, vua hay cao? Toi se tinh chinh ke hoach sau khi ban chon.": (
+                "Bạn ưu tiên khẩu vị rủi ro nào: thấp, vừa hay cao? Tôi sẽ tinh chỉnh kế hoạch sau khi bạn chọn."
+            ),
+            "Cần thiềt tân đánh chi tiêu để đầt mục tiêu.": "Cần thắt chặt chi tiêu để đạt mục tiêu.",
+            "Hãy xác đọnh mục rui ro để cá nhan hơ khuyen nghi.": (
+                "Hãy xác định mức rủi ro để cá nhân hóa khuyến nghị."
+            ),
+            "Tối đáo thiết lệp kặ hoạch chi tiêu và tân đánh chi tiêu thợ vàn.": (
+                "Thiết lập kế hoạch chi tiêu và theo dõi chi tiêu hằng tuần."
+            ),
+            "Sử dụng dềch vụ tiết kiệm để têng tốc đó tiền.": "Sử dụng dịch vụ tiết kiệm để tăng tốc tích lũy.",
+            "Giới hạn: Không có thông tin về sử thàch của ngươi dùng.": (
+                "Giới hạn: Không có thông tin về sở thích của người dùng."
+            ),
+        }
+        for src, dst in replacements.items():
+            line = line.replace(src, dst)
+
+        # Fix common unaccented Vietnamese phrases (light cleanup only, no numeric/fact changes).
+        vi_phrase_replacements = [
+            (r"\bngay qua\b", "ngày qua"),
+            (r"\b6 thang\b", "6 tháng"),
+            (r"\b90 ngay\b", "90 ngày"),
+            (r"\bchua kha thi\b", "chưa khả thi"),
+            (r"\bkhau vi rui ro\b", "khẩu vị rủi ro"),
+            (r"\bmuc rui ro\b", "mức rủi ro"),
+            (r"\bkhuyen nghi\b", "khuyến nghị"),
+            (r"\bca nhan hoa\b", "cá nhân hóa"),
+            (r"\bthiet lap\b", "thiết lập"),
+            (r"\bke hoach\b", "kế hoạch"),
+            (r"\btheo doi\b", "theo dõi"),
+            (r"\bhang tuan\b", "hằng tuần"),
+            (r"\bnguoi dung\b", "người dùng"),
+            (r"\bso thich\b", "sở thích"),
+            (r"\bdich vu tiet kiem\b", "dịch vụ tiết kiệm"),
+            (r"\btang toc tich luy\b", "tăng tốc tích lũy"),
+        ]
+        for pattern, replacement in vi_phrase_replacements:
+            line = re.sub(pattern, replacement, line, flags=re.IGNORECASE)
+
+        # Normalize mixed bilingual risk labels.
+        line = re.sub(r"\bthấp\s+low\b", "thấp", line, flags=re.IGNORECASE)
+        line = re.sub(r"\btrung bình\s+medium\b", "trung bình", line, flags=re.IGNORECASE)
+        line = re.sub(r"\bcao\s+high\b", "cao", line, flags=re.IGNORECASE)
+
+        # Remove orphan number tails like "... 90 ngày qua 1."
+        line = re.sub(r"(\b\d+\s+ngày qua)\s+\d+\.$", r"\1.", line, flags=re.IGNORECASE)
+
+    line = re.sub(r"\s{2,}", " ", line).strip()
+    return line
+
+
+def _sanitize_prose_lines(lines: Iterable[str], *, language: str) -> list[str]:
+    sanitized: list[str] = []
+    for item in lines:
+        cleaned = _sanitize_prose_line(str(item or ""), language=language)
+        if cleaned:
+            sanitized.append(cleaned)
+    return sanitized
+
+
+def _normalize_prompt_for_match(text: str) -> str:
+    lowered = str(text or "").lower()
+    replacements = str.maketrans(
+        {
+            "á": "a",
+            "à": "a",
+            "ả": "a",
+            "ã": "a",
+            "ạ": "a",
+            "ă": "a",
+            "ắ": "a",
+            "ằ": "a",
+            "ẳ": "a",
+            "ẵ": "a",
+            "ặ": "a",
+            "â": "a",
+            "ấ": "a",
+            "ầ": "a",
+            "ẩ": "a",
+            "ẫ": "a",
+            "ậ": "a",
+            "é": "e",
+            "è": "e",
+            "ẻ": "e",
+            "ẽ": "e",
+            "ẹ": "e",
+            "ê": "e",
+            "ế": "e",
+            "ề": "e",
+            "ể": "e",
+            "ễ": "e",
+            "ệ": "e",
+            "í": "i",
+            "ì": "i",
+            "ỉ": "i",
+            "ĩ": "i",
+            "ị": "i",
+            "ó": "o",
+            "ò": "o",
+            "ỏ": "o",
+            "õ": "o",
+            "ọ": "o",
+            "ô": "o",
+            "ố": "o",
+            "ồ": "o",
+            "ổ": "o",
+            "ỗ": "o",
+            "ộ": "o",
+            "ơ": "o",
+            "ớ": "o",
+            "ờ": "o",
+            "ở": "o",
+            "ỡ": "o",
+            "ợ": "o",
+            "ú": "u",
+            "ù": "u",
+            "ủ": "u",
+            "ũ": "u",
+            "ụ": "u",
+            "ư": "u",
+            "ứ": "u",
+            "ừ": "u",
+            "ử": "u",
+            "ữ": "u",
+            "ự": "u",
+            "ý": "y",
+            "ỳ": "y",
+            "ỷ": "y",
+            "ỹ": "y",
+            "ỵ": "y",
+            "đ": "d",
+        }
+    )
+    return lowered.translate(replacements)
+
+
+def _asks_anomaly_date(user_prompt: str) -> bool:
+    normalized = _normalize_prompt_for_match(user_prompt)
+    asks_date = any(term in normalized for term in ["ngay", "date", "when", "luc nao", "bao gio"])
+    anomaly_hint = any(
+        term in normalized
+        for term in [
+            "bat thuong",
+            "giao dich la",
+            "anomaly",
+            "change point",
+            "change_point",
+        ]
+    )
+    return asks_date and anomaly_hint
+
+
+def _has_anomaly_context(user_prompt: str, intent: str) -> bool:
+    normalized = _normalize_prompt_for_match(user_prompt)
+    anomaly_terms = [
+        "bat thuong",
+        "giao dich la",
+        "anomaly",
+        "change point",
+        "change_point",
+        "suspicious transaction",
+    ]
+    if any(term in normalized for term in anomaly_terms):
+        return True
+    return str(intent or "").strip().lower() == "risk"
+
+
+def _should_force_anomaly_date(user_prompt: str, intent: str, valid_fact_ids: set[str]) -> bool:
+    if "anomaly.latest_change_point.90d" not in valid_fact_ids:
+        return False
+    return _asks_anomaly_date(user_prompt) or _has_anomaly_context(user_prompt, intent)
+
+
 def _fallback_summary_lines(language: str) -> list[str]:
     if language == "vi":
         return [
-            "Da tong hop thong tin tu cac fact da xac thuc.",
-            "Noi dung dang gioi han trong pham vi du lieu tu tool.",
-            "Ban co the bo sung muc tieu cu the de nhan khuyen nghi sac net hon.",
+            "Đã tổng hợp thông tin từ các fact đã xác thực.",
+            "Nội dung đang giới hạn trong phạm vi dữ liệu từ tool.",
+            "Bạn có thể bổ sung mục tiêu cụ thể để nhận khuyến nghị sắc nét hơn.",
         ]
     return [
         "The response is synthesized from verified facts only.",
@@ -308,8 +516,8 @@ def _fallback_summary_lines(language: str) -> list[str]:
 def _fallback_actions(language: str) -> list[str]:
     if language == "vi":
         return [
-            "Xac nhan uu tien tai chinh ngan han (an toan dong tien, tra no, hay tich luy).",
-            "Cap nhat du lieu moi va danh gia lai sau hai tuan.",
+            "Xác nhận ưu tiên tài chính ngắn hạn (an toàn dòng tiền, trả nợ, hay tích lũy).",
+            "Cập nhật dữ liệu mới và đánh giá lại sau hai tuần.",
         ]
     return [
         "Confirm your top short-term financial priority.",
@@ -320,6 +528,7 @@ def _fallback_actions(language: str) -> list[str]:
 def _sanitize_answer_payload(
     payload: Dict[str, Any],
     *,
+    user_prompt: str,
     intent: str,
     risk_appetite: str,
     default_language: str,
@@ -349,6 +558,31 @@ def _sanitize_answer_payload(
     normalized["schema_version"] = "answer_plan_v2"
 
     summary_lines = _coerce_str_list(normalized.get("summary_lines"))
+    force_anomaly_date = _should_force_anomaly_date(user_prompt, intent, valid_fact_ids)
+    if force_anomaly_date:
+        forced_line = (
+            "Ngay bat thuong gan nhat la [F:anomaly.latest_change_point.90d]."
+            if language == "vi"
+            else "The latest anomaly date is [F:anomaly.latest_change_point.90d]."
+        )
+        has_anomaly_date_line = any(
+            "anomaly.latest_change_point.90d" in line
+            or (
+                "ngay" in _normalize_prompt_for_match(line)
+                and "bat thuong" in _normalize_prompt_for_match(line)
+            )
+            or (
+                "date" in _normalize_prompt_for_match(line)
+                and "anomaly" in _normalize_prompt_for_match(line)
+            )
+            for line in summary_lines
+        )
+        if not has_anomaly_date_line:
+            if len(summary_lines) < 5:
+                summary_lines.append(forced_line)
+            else:
+                summary_lines[-1] = forced_line
+    summary_lines = _sanitize_prose_lines(summary_lines, language=language)
     if len(summary_lines) < 3:
         summary_lines = [*summary_lines, *_fallback_summary_lines(language)]
     normalized["summary_lines"] = summary_lines[:5]
@@ -357,6 +591,16 @@ def _sanitize_answer_payload(
     key_metrics = [item for item in key_metrics if str(item.get("fact_id") or "").strip() in valid_fact_ids]
     if not key_metrics and valid_fact_ids:
         key_metrics = [{"fact_id": fact_id, "label": ""} for fact_id in sorted(valid_fact_ids)[:3]]
+    if force_anomaly_date:
+        has_change_point_metric = any(
+            str(item.get("fact_id") or "").strip() == "anomaly.latest_change_point.90d"
+            for item in key_metrics
+        )
+        if not has_change_point_metric:
+            key_metrics = [
+                {"fact_id": "anomaly.latest_change_point.90d", "label": "Ngày bất thường gần nhất"},
+                *key_metrics,
+            ]
     normalized["key_metrics"] = key_metrics
 
     actions = _coerce_str_list(normalized.get("actions"))
@@ -366,18 +610,26 @@ def _sanitize_answer_payload(
         normalized_risk = "unknown"
     if normalized_risk == "unknown" and normalized_intent in {"planning", "scenario", "invest"}:
         follow_up_line = (
-            "Ban uu tien khau vi rui ro nao: thap, vua hay cao? Toi se tinh chinh ke hoach sau khi ban chon."
+            "Bạn ưu tiên khẩu vị rủi ro nào: thấp, vừa hay cao? Tôi sẽ tinh chỉnh kế hoạch sau khi bạn chọn."
             if language == "vi"
             else "Which risk appetite fits you best: low, medium, or high? I will refine the plan after your choice."
         )
-        follow_up_markers = ["khau vi rui ro", "risk appetite", "low, medium, or high", "thap, vua hay cao"]
+        follow_up_markers = [
+            "khau vi rui ro",
+            "khẩu vị rủi ro",
+            "risk appetite",
+            "low, medium, or high",
+            "thap, vua hay cao",
+            "thấp, vừa hay cao",
+        ]
         if not any(any(marker in item.lower() for marker in follow_up_markers) for item in actions):
             actions = [follow_up_line, *actions]
+    actions = _sanitize_prose_lines(actions, language=language)
     if len(actions) < 2:
         actions = [*actions, *_fallback_actions(language)]
     normalized["actions"] = actions[:4]
-    normalized["assumptions"] = _coerce_str_list(normalized.get("assumptions"))
-    normalized["limitations"] = _coerce_str_list(normalized.get("limitations"))
+    normalized["assumptions"] = _sanitize_prose_lines(_coerce_str_list(normalized.get("assumptions")), language=language)
+    normalized["limitations"] = _sanitize_prose_lines(_coerce_str_list(normalized.get("limitations")), language=language)
 
     text_sections = [
         *normalized["summary_lines"],
@@ -491,6 +743,7 @@ def synthesize_answer_plan_with_bedrock(
 
         payload = _sanitize_answer_payload(
             payload,
+            user_prompt=user_prompt,
             intent=intent,
             risk_appetite=str(policy_flags.get("risk_appetite") or ""),
             default_language=advisory_context.language,
@@ -514,4 +767,3 @@ def synthesize_answer_plan_with_bedrock(
             continue
 
     return None, errors, runtime_meta
-

@@ -44,6 +44,13 @@ def _find_fact_by_prefix(advisory_context: AdvisoryContextV1, prefix: str) -> ob
     return None
 
 
+def _find_fact_by_id(advisory_context: AdvisoryContextV1, fact_id: str) -> object | None:
+    for fact in advisory_context.facts:
+        if fact.fact_id == fact_id:
+            return fact
+    return None
+
+
 def _risk_appetite_from_context(advisory_context: AdvisoryContextV1) -> str:
     policy_risk = str((advisory_context.policy_flags or {}).get("risk_appetite") or "").strip().lower()
     if policy_risk in {"conservative", "moderate", "aggressive"}:
@@ -164,10 +171,19 @@ def render_facts_only_compact_response(
     vi = language == "vi"
     lines: list[str] = []
     lines.append("**Tóm Tắt Nhanh**" if vi else "**Quick Summary**")
+    latest_anomaly_date_fact = _find_fact_by_id(advisory_context, "anomaly.latest_change_point.90d")
     if advisory_context.facts:
         top = advisory_context.facts[:4]
         for fact in top:
             lines.append(f"- {fact.label}: {fact.value_text}")
+        if advisory_context.intent == "risk" and latest_anomaly_date_fact is not None:
+            latest_date = str(getattr(latest_anomaly_date_fact, "value_text", "") or "").strip()
+            if latest_date:
+                lines.append(
+                    f"- Ngày bất thường gần nhất: {latest_date}"
+                    if vi
+                    else f"- Latest anomaly date: {latest_date}"
+                )
     else:
         lines.append("- Chưa đủ dữ liệu để đưa ra kết luận đáng tin cậy." if vi else "- Not enough data for a reliable conclusion.")
         lines.append("- Vui lòng đồng bộ thêm giao dịch và hỏi lại." if vi else "- Please sync more transactions and retry.")

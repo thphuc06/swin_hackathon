@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import calendar
+import re
 import unicodedata
 from typing import cast
 
@@ -33,6 +35,20 @@ def _contains_any(text: str, terms: list[str]) -> bool:
     return any(term in text for term in terms)
 
 
+def _has_invalid_calendar_date(text: str) -> bool:
+    for match in re.finditer(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b", text):
+        day = int(match.group(1))
+        month = int(match.group(2))
+        year_text = match.group(3)
+        year = int(year_text) if year_text else 2025
+        if month < 1 or month > 12:
+            return True
+        max_day = calendar.monthrange(year, month)[1]
+        if day < 1 or day > max_day:
+            return True
+    return False
+
+
 def _has_scenario_delta(slots: dict[str, object]) -> bool:
     for key in ["income_delta_pct", "spend_delta_pct", "income_delta_amount_vnd", "spend_delta_amount_vnd", "variants"]:
         value = slots.get(key)
@@ -56,8 +72,69 @@ def _top2_score(extraction: IntentExtractionV1, intent_name: IntentName) -> floa
 
 
 def suggest_intent_override(prompt: str, extraction: IntentExtractionV1) -> tuple[IntentName | None, str]:
+    normalized = _normalize_prompt(prompt)
     domain_relevance = float(getattr(extraction, "domain_relevance", 1.0))
     out_of_scope_score = _top2_score(extraction, "out_of_scope")
+    invest_terms = [
+        "co phieu",
+        "crypto",
+        "etf",
+        "mua",
+        "ban",
+        "dau tu",
+        "invest",
+        "portfolio",
+        "trade",
+    ]
+    optimize_terms = [
+        "toi uu tai chinh",
+        "toi uu tai chinh ca nhan",
+        "quan ly tai chinh",
+        "toi uu dong tien",
+        "optimize personal finance",
+        "financial optimization",
+    ]
+    anomaly_terms = [
+        "giao dich la",
+        "giao dich bat thuong",
+        "bat thuong",
+        "anomaly",
+        "fraud",
+        "lua dao",
+        "suspicious transaction",
+        "unrecognized transaction",
+    ]
+    finance_terms = [
+        "chi tieu",
+        "tieu",
+        "dong tien",
+        "thu nhap",
+        "ngan sach",
+        "tai chinh",
+        "giao dich",
+        "spend",
+        "cashflow",
+        "budget",
+        "transaction",
+        "saving",
+        "tiet kiem",
+    ]
+
+    if extraction.intent == "invest" and _contains_any(normalized, optimize_terms) and not _contains_any(
+        normalized, invest_terms
+    ):
+        return "planning", "intent_override:invest_to_planning_optimize"
+
+    if extraction.intent in {"summary", "out_of_scope"} and _contains_any(normalized, anomaly_terms):
+        return "risk", "intent_override:anomaly_to_risk"
+
+    if (
+        extraction.intent == "out_of_scope"
+        and _contains_any(normalized, finance_terms)
+        and _has_invalid_calendar_date(normalized)
+    ):
+        return "summary", "intent_override:oos_invalid_date_in_scope"
+
     if extraction.intent != "out_of_scope":
         if domain_relevance <= 0.25:
             return "out_of_scope", "intent_override:low_domain_relevance"
@@ -66,8 +143,6 @@ def suggest_intent_override(prompt: str, extraction: IntentExtractionV1) -> tupl
 
     if extraction.intent != "scenario":
         return None, ""
-
-    normalized = _normalize_prompt(prompt)
     slots = extraction.slots if isinstance(extraction.slots, dict) else {}
     has_delta = _has_scenario_delta(slots)
 

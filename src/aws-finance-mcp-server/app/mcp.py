@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Dict
 
 from fastapi import APIRouter, Header
@@ -20,6 +21,7 @@ from app.finance import (
 )
 
 router = APIRouter(tags=["mcp"])
+logger = logging.getLogger(__name__)
 
 
 class SpendInput(BaseModel):
@@ -420,6 +422,12 @@ def mcp_jsonrpc(payload: Dict[str, Any], authorization: str | None = Header(defa
     except PermissionError as exc:
         return _jsonrpc_error(req_id, -32003, "Forbidden", str(exc))
     except Exception as exc:
-        return _jsonrpc_error(req_id, -32000, "Tool execution failed", str(exc))
+        logger.exception("MCP tool execution failed: tool=%s error=%s", tool_name, exc)
+        return _jsonrpc_error(
+            req_id,
+            -32000,
+            "Tool execution failed",
+            {"tool": tool_name, "error_type": type(exc).__name__, "message": str(exc)},
+        )
 
     return _jsonrpc_ok(req_id, {"content": [{"type": "text", "text": json.dumps(result)}]})

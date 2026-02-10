@@ -229,11 +229,73 @@ def _extract_anomaly_facts(tool_outputs: Dict[str, Any], facts: list[FactV1]) ->
             source_path="flags[0]",
         )
 
+    external_engines = anomaly.get("external_engines")
+    ruptures = external_engines.get("ruptures_pelt") if isinstance(external_engines, dict) else None
+    change_points_raw = ruptures.get("change_points") if isinstance(ruptures, dict) else None
+    if not isinstance(change_points_raw, list):
+        change_points_raw = anomaly.get("change_points")
+    if not isinstance(change_points_raw, list):
+        change_points_raw = []
+
+    change_points: list[str] = []
+    for item in change_points_raw:
+        value = str(item or "").strip()
+        if value and value not in change_points:
+            change_points.append(value)
+
+    if change_points:
+        _add_fact(
+            facts,
+            fact_id="anomaly.change_points.90d",
+            label="Các mốc ngày biến động chi tiêu",
+            value=change_points,
+            value_text=", ".join(change_points),
+            timeframe="90d",
+            source_tool="anomaly_signals_v1",
+            source_path="external_engines.ruptures_pelt.change_points",
+        )
+        _add_fact(
+            facts,
+            fact_id="anomaly.latest_change_point.90d",
+            label="Ngày bất thường gần nhất",
+            value=change_points[-1],
+            value_text=change_points[-1],
+            timeframe="90d",
+            source_tool="anomaly_signals_v1",
+            source_path="external_engines.ruptures_pelt.change_points[-1]",
+        )
+
 
 def _extract_goal_facts(tool_outputs: Dict[str, Any], facts: list[FactV1]) -> None:
     goal = tool_outputs.get("goal_feasibility_v1")
     if not isinstance(goal, dict):
         return
+    status = str(goal.get("status") or "").strip().lower()
+    if status.startswith("insufficient_"):
+        reason_codes = goal.get("reason_codes")
+        if not isinstance(reason_codes, list):
+            reason_codes = []
+        reason_text = ", ".join(str(code).strip() for code in reason_codes if str(code).strip()) or status
+        _add_fact(
+            facts,
+            fact_id="goal.status",
+            label="Trang thai du lieu goal feasibility",
+            value=status,
+            value_text=status,
+            source_tool="goal_feasibility_v1",
+            source_path="status",
+        )
+        _add_fact(
+            facts,
+            fact_id="goal.reason_codes",
+            label="Ly do thieu du lieu goal feasibility",
+            value=reason_codes,
+            value_text=reason_text,
+            source_tool="goal_feasibility_v1",
+            source_path="reason_codes",
+        )
+        return
+
     target_amount = safe_float(goal.get("target_amount"))
     horizon_months = int(safe_float(goal.get("horizon_months")))
     required_monthly = safe_float(goal.get("required_monthly_saving"))
@@ -320,6 +382,31 @@ def _extract_recurring_facts(tool_outputs: Dict[str, Any], facts: list[FactV1]) 
 def _extract_jar_facts(tool_outputs: Dict[str, Any], facts: list[FactV1]) -> None:
     allocation = tool_outputs.get("jar_allocation_suggest_v1")
     if not isinstance(allocation, dict):
+        return
+    status = str(allocation.get("status") or "").strip().lower()
+    if status.startswith("insufficient_"):
+        reason_codes = allocation.get("reason_codes")
+        if not isinstance(reason_codes, list):
+            reason_codes = []
+        reason_text = ", ".join(str(code).strip() for code in reason_codes if str(code).strip()) or status
+        _add_fact(
+            facts,
+            fact_id="jar.status",
+            label="Trang thai du lieu jar allocation",
+            value=status,
+            value_text=status,
+            source_tool="jar_allocation_suggest_v1",
+            source_path="status",
+        )
+        _add_fact(
+            facts,
+            fact_id="jar.reason_codes",
+            label="Ly do thieu du lieu jar allocation",
+            value=reason_codes,
+            value_text=reason_text,
+            source_tool="jar_allocation_suggest_v1",
+            source_path="reason_codes",
+        )
         return
     rows = allocation.get("allocations")
     if not isinstance(rows, list) or not rows:
@@ -443,9 +530,19 @@ def _extract_slot_facts(extraction_slots: Dict[str, Any], facts: list[FactV1]) -
     if not isinstance(extraction_slots, dict):
         return
 
-    target_amount = safe_float(extraction_slots.get("target_amount_vnd"), 0.0) or safe_float(
-        extraction_slots.get("target_amount"), 0.0
-    )
+    target_amount = 0.0
+    for key in [
+        "target_amount_vnd",
+        "target_amount",
+        "goal_target_amount",
+        "savings_goal_vnd",
+        "goal_amount",
+        "savings_target_vnd",
+    ]:
+        parsed = safe_float(extraction_slots.get(key), 0.0)
+        if parsed > 0:
+            target_amount = parsed
+            break
     if target_amount > 0:
         _add_fact(
             facts,
@@ -458,7 +555,18 @@ def _extract_slot_facts(extraction_slots: Dict[str, Any], facts: list[FactV1]) -
             source_path="slots.target_amount_vnd",
         )
 
-    horizon = int(safe_float(extraction_slots.get("horizon_months"), 0.0))
+    horizon = 0
+    for key in [
+        "horizon_months",
+        "goal_horizon_months",
+        "time_horizon_months",
+        "duration_months",
+        "saving_horizon_months",
+    ]:
+        parsed = int(safe_float(extraction_slots.get(key), 0.0))
+        if parsed > 0:
+            horizon = parsed
+            break
     if horizon > 0:
         _add_fact(
             facts,

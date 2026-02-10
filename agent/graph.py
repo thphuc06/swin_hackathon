@@ -33,6 +33,7 @@ from config import (
 )
 from encoding import apply_prompt_encoding_gate
 from router import (
+    ClarifyingQuestionV1,
     RouteDecisionV1,
     build_route_decision,
     extract_intent_with_bedrock,
@@ -85,6 +86,7 @@ class AgentState(TypedDict):
     advisory_context: Dict[str, Any]
     answer_plan_v2: Dict[str, Any]
     response_meta: Dict[str, Any]
+    tool_errors: Dict[str, Any]
     response: str
     trace_id: str
 
@@ -1026,14 +1028,29 @@ def _goal_request_from_slots(slots: Dict[str, Any], prompt: str) -> Dict[str, An
         return parsed_goal
 
     target_amount = parsed_goal.get("target_amount")
-    for key in ["target_amount", "target_amount_vnd", "goal_target_amount"]:
+    for key in [
+        "target_amount",
+        "target_amount_vnd",
+        "goal_target_amount",
+        "savings_goal_vnd",
+        "savings_goal_amount_vnd",
+        "goal_amount",
+        "savings_target_vnd",
+    ]:
         slot_value = _safe_float(slots.get(key), 0.0)
         if slot_value > 0:
             target_amount = slot_value
             break
 
     horizon_months = parsed_goal.get("horizon_months")
-    for key in ["horizon_months", "goal_horizon_months"]:
+    for key in [
+        "horizon_months",
+        "goal_horizon_months",
+        "time_horizon_months",
+        "savings_goal_months",
+        "duration_months",
+        "saving_horizon_months",
+    ]:
         slot_value = _safe_int(slots.get(key), 0)
         if slot_value > 0:
             horizon_months = slot_value
@@ -1097,6 +1114,7 @@ def _record_tool_error(state: AgentState, tool_name: str, exc: Exception) -> Non
     tool_errors[tool_name] = {
         "error_type": type(exc).__name__,
         "message": str(exc),
+        "stage": "tool_execution",
     }
     state["tool_errors"] = tool_errors
 
@@ -1243,6 +1261,23 @@ def intent_router(state: AgentState) -> AgentState:
     )
     if override_reason:
         semantic_decision.reason_codes = [*semantic_decision.reason_codes, override_reason]
+    if override_reason == "intent_override:oos_invalid_date_in_scope":
+        semantic_decision = semantic_decision.model_copy(
+            update={
+                "clarify_needed": True,
+                "tool_bundle": [],
+                "reason_codes": [*semantic_decision.reason_codes, "invalid_calendar_date"],
+                "clarifying_question": ClarifyingQuestionV1(
+                    question_id="invalid_calendar_date",
+                    question_text=(
+                        "Ban dang hoi theo ngay khong hop le (vi du 31/02). "
+                        "Vui long gui lai ngay hop le theo dd/mm hoac dd/mm/yyyy."
+                    ),
+                    options=["Gui lai ngay hop le", "Xem tong quan chi tieu 30 ngay gan nhat"],
+                    max_questions=max_clarify,
+                ),
+            }
+        )
     if risk_appetite == "unknown" and semantic_decision.final_intent in {"planning", "scenario", "invest"}:
         semantic_decision.reason_codes = [*semantic_decision.reason_codes, "risk_appetite_missing_soft_question"]
 
@@ -1334,6 +1369,7 @@ def suitability_guard(state: AgentState) -> AgentState:
             "latency_ms": 0,
             "reason_codes": sorted(set(reason_codes)),
             "disclaimer_effective": disclaimer,
+            "tool_errors": state.get("tool_errors", {}),
         }
     return state
 
@@ -1424,11 +1460,22 @@ def _execute_tool_safe(tool_name: str, state: AgentState, extraction_slots: Dict
 
         if tool_name == "goal_feasibility_v1":
             goal_request = _goal_request_from_slots(extraction_slots, state.get("prompt", ""))
+            goal_id = str(extraction_slots.get("goal_id") or "").strip() or None
+            target_amount = goal_request.get("target_amount")
+            horizon_months = goal_request.get("horizon_months")
+            if target_amount is None and not goal_id:
+                return tool_name, {
+                    "status": "insufficient_input",
+                    "reason_codes": ["missing_goal_target"],
+                    "hint": "Provide target amount or select an existing goal before feasibility analysis.",
+                    "trace_id": state["trace_id"],
+                }
             result = goal_feasibility_tool(
                 state["user_token"],
                 user_id=state["user_id"],
-                target_amount=goal_request.get("target_amount"),
-                horizon_months=goal_request.get("horizon_months") or 12,
+                target_amount=target_amount,
+                horizon_months=horizon_months if _safe_int(horizon_months, 0) > 0 else None,
+                goal_id=goal_id,
                 trace_id=state["trace_id"],
             )
             return tool_name, result
@@ -1503,6 +1550,19 @@ def decision_engine(state: AgentState) -> AgentState:
                     continue
                 else:
                     _record_tool_output(state, result_tool_name, result)
+                    if isinstance(result, dict):
+                        status = str(result.get("status") or "").strip().lower()
+                        if status.startswith("insufficient_"):
+                            existing_meta = (
+                                state.get("response_meta") if isinstance(state.get("response_meta"), dict) else {}
+                            )
+                            reason_codes = [
+                                str(code).strip()
+                                for code in existing_meta.get("reason_codes", [])
+                                if str(code).strip()
+                            ]
+                            reason_codes.append(f"tool_status:{result_tool_name}:{status}")
+                            state["response_meta"] = {**existing_meta, "reason_codes": sorted(set(reason_codes))}
                     # Special handling for some tools
                     if result_tool_name == "risk_profile_non_investment_v1" and state.get("intent") == "invest":
                         state["education_only"] = True
@@ -1606,6 +1666,7 @@ def reasoning(state: AgentState) -> AgentState:
         "encoding_reason_codes": [str(code) for code in encoding_reason_codes if str(code).strip()],
         "encoding_guess": str(existing_meta.get("encoding_guess") or ""),
         "encoding_input_fingerprint": str(existing_meta.get("encoding_input_fingerprint") or ""),
+        "tool_errors": state.get("tool_errors", {}) if isinstance(state.get("tool_errors"), dict) else {},
     }
     response_meta["reason_codes"].extend(
         [str(code).strip() for code in existing_meta.get("reason_codes", []) if str(code).strip()]
@@ -1782,6 +1843,7 @@ def reasoning(state: AgentState) -> AgentState:
 
     response_meta["latency_ms"] = int((time.perf_counter() - synthesis_start) * 1000)
     response_meta["reason_codes"] = sorted(set(str(item) for item in response_meta["reason_codes"] if str(item).strip()))
+    response_meta["tool_errors"] = state.get("tool_errors", {}) if isinstance(state.get("tool_errors"), dict) else {}
 
     if mode == "llm_shadow":
         legacy_body = _legacy_reasoning_body(state, vietnamese)
@@ -1882,6 +1944,7 @@ def run_agent(prompt: str, user_token: str, user_id: str) -> Dict[str, Any]:
             "evidence_pack": {},
             "advisory_context": {},
             "answer_plan_v2": {},
+            "tool_errors": {},
             "response_meta": {
                 "mode": _response_mode(),
                 "model_id": "",
@@ -1902,6 +1965,7 @@ def run_agent(prompt: str, user_token: str, user_id: str) -> Dict[str, Any]:
                 "encoding_reason_codes": [],
                 "encoding_guess": "",
                 "encoding_input_fingerprint": "",
+                "tool_errors": {},
             },
             "response": "",
             "trace_id": trace_id,

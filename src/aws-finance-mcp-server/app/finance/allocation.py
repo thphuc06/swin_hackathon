@@ -73,7 +73,38 @@ def jar_allocation_suggest(
     goals = goal_overrides if goal_overrides is not None else fetch_goals(sql, user_id)
 
     if not jars:
-        raise ValueError("No jars found for user. Seed jars before requesting allocation suggestion.")
+        tool_input = {
+            "user_id": user_id,
+            "monthly_income_override": monthly_income_override,
+            "goal_overrides": goal_overrides or [],
+            "as_of": iso_utc(as_of_dt),
+        }
+        payload = {
+            "status": "insufficient_data",
+            "reason_codes": ["missing_jars"],
+            "message": "No jars found for user. Seed jars before requesting allocation suggestion.",
+            "baseline_monthly_income": 0.0,
+            "monthly_reference_spend": 0.0,
+            "allocations": [],
+            "leftover": 0.0,
+            "constraints_applied": ["insufficient_data"],
+        }
+        result = build_output(
+            tool_name=TOOL_NAME,
+            tool_input=tool_input,
+            payload=payload,
+            trace_id=trace,
+            started_at=started_at,
+            sql_snapshot_ts=iso_utc(),
+        )
+        write_audit_event(
+            sql,
+            user_id=user_id,
+            trace_id=trace,
+            event_type=TOOL_NAME,
+            payload={"params": tool_input, "result": {"status": "insufficient_data", "reason_codes": ["missing_jars"]}},
+        )
+        return result
 
     monthly_income: Dict[str, float] = defaultdict(float)
     monthly_debit: Dict[str, float] = defaultdict(float)
