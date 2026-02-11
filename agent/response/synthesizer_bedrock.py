@@ -307,6 +307,22 @@ def _coerce_key_metrics(value: Any) -> list[Dict[str, str]]:
     return metrics
 
 
+_ADJACENT_PHRASE_REPEAT_PATTERN = re.compile(
+    r"\b(?P<phrase>[0-9A-Za-zÀ-ỹ]+(?:\s+[0-9A-Za-zÀ-ỹ]+){0,3})\s+(?P=phrase)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _collapse_adjacent_phrase_repetition(text: str) -> str:
+    current = str(text or "")
+    for _ in range(3):
+        updated = _ADJACENT_PHRASE_REPEAT_PATTERN.sub(lambda match: str(match.group("phrase") or ""), current)
+        if updated == current:
+            break
+        current = updated
+    return current
+
+
 def _sanitize_prose_line(text: str, *, language: str) -> str:
     line = str(text or "").strip()
     if not line:
@@ -314,6 +330,18 @@ def _sanitize_prose_line(text: str, *, language: str) -> str:
 
     # Remove non-fact placeholders leaked by model.
     line = _NON_FACT_PLACEHOLDER_PATTERN.sub("", line)
+    line = _collapse_adjacent_phrase_repetition(line)
+
+    # Collapse obvious duplicate adjacent numeric tokens.
+    line = re.sub(r"\b(\d+(?:[.,]\d+)?%?)\s+\1\b", r"\1", line, flags=re.IGNORECASE)
+
+    # Keep one representation when model repeats amount in two adjacent formats.
+    line = re.sub(
+        r"(\b\d+(?:[.,]\d+)?\s*(?:ty|tỷ|trieu|triệu|k|nghin|ngan|million|billion|bn|m)\b)\s+\d[\d,\.]*(?=\b)",
+        r"\1",
+        line,
+        flags=re.IGNORECASE,
+    )
 
     # Collapse obvious duplicate adjacent percentages.
     line = re.sub(r"(\d+(?:\.\d+)?%)\s+\1", r"\1", line)

@@ -14,24 +14,54 @@ DEFAULT_DISCLAIMER = "Educational guidance only. We do not provide investment ad
 
 EXECUTION_ACTIONS = {"buy", "sell", "execute", "trade", "order", "transfer_funds"}
 RECOMMENDATION_ACTIONS = {"recommend_buy", "recommend_sell", "recommend_trade"}
-INVEST_KEYWORDS = {
+INVEST_ASSET_KEYWORDS = {
     "invest",
     "stock",
     "etf",
     "crypto",
-    "buy",
-    "sell",
-    "trade",
+    "coin",
+    "shares",
+    "share",
     "portfolio",
+    "bond",
+    "trai phieu",
+    "chung khoan",
     "co phieu",
     "dau tu",
 }
 
+NON_INVEST_PLANNING_TERMS = {
+    "mua nha",
+    "mua can ho",
+    "mua xe",
+    "mua o to",
+    "mua oto",
+    "muc tieu tiet kiem",
+    "ke hoach tiet kiem",
+    "saving goal",
+    "buy house",
+    "buy home",
+    "buy car",
+}
 
-def _contains_invest_intent(text: str) -> bool:
+
+def _contains_invest_asset_context(text: str) -> bool:
     normalized = _normalize_text(text)
-    for keyword in INVEST_KEYWORDS:
+    for keyword in INVEST_ASSET_KEYWORDS:
         if re.search(rf"\b{re.escape(keyword)}\b", normalized):
+            return True
+    return bool(
+        re.search(
+            r"\b(mua|buy|ban|sell)\s+(co phieu|chung khoan|crypto|coin|etf|stock|shares?|portfolio|bond|trai phieu)\b",
+            normalized,
+        )
+    )
+
+
+def _contains_non_invest_planning_goal(text: str) -> bool:
+    normalized = _normalize_text(text)
+    for term in NON_INVEST_PLANNING_TERMS:
+        if term in normalized:
             return True
     return False
 
@@ -58,17 +88,30 @@ def suitability_guard(
     action = (requested_action or "").strip().lower()
     intent_norm = (intent or "").strip().lower()
     prompt_text = prompt or ""
+    normalized_prompt = _normalize_text(prompt_text)
 
-    prompt_invest_like = _contains_invest_intent(prompt_text)
-    action_invest_like = action in EXECUTION_ACTIONS or action in RECOMMENDATION_ACTIONS
-    intent_invest_like = _contains_invest_intent(intent_norm)
+    prompt_invest_context = _contains_invest_asset_context(prompt_text)
+    intent_invest_context = intent_norm == "invest" and prompt_invest_context
+    has_invest_context = prompt_invest_context or intent_invest_context
+    non_invest_planning_goal = _contains_non_invest_planning_goal(prompt_text)
     recommendation_hint = bool(
         re.search(
             r"\b(co nen|nen|should i|is it a good time to)\s*(mua|ban|buy|sell)\b",
-            _normalize_text(prompt_text),
+            normalized_prompt,
         )
     )
-    invest_like = prompt_invest_like or action_invest_like or (intent_invest_like and recommendation_hint)
+    recommendation_hint = recommendation_hint and has_invest_context
+
+    if action in {"buy", "sell", "recommend_buy", "recommend_sell", "recommend_trade"}:
+        action_invest_like = has_invest_context
+    else:
+        action_invest_like = action in EXECUTION_ACTIONS and has_invest_context
+
+    intent_invest_like = intent_norm == "invest" and has_invest_context
+    invest_like = prompt_invest_context or action_invest_like or intent_invest_like or recommendation_hint
+    if non_invest_planning_goal and not has_invest_context:
+        invest_like = False
+
     is_execution = action in EXECUTION_ACTIONS
     is_recommendation = action in RECOMMENDATION_ACTIONS or recommendation_hint
 

@@ -45,7 +45,7 @@ AGENTCORE_GATEWAY_ENDPOINT = os.getenv("AGENTCORE_GATEWAY_ENDPOINT", "")
 AGENTCORE_GATEWAY_TOOL_NAME = os.getenv("AGENTCORE_GATEWAY_TOOL_NAME", "")
 AGENTCORE_MEMORY_ID = os.getenv("AGENTCORE_MEMORY_ID", "")
 
-BACKEND_API_BASE = os.getenv("BACKEND_API_BASE", "http://localhost:8000")
+BACKEND_API_BASE = os.getenv("BACKEND_API_BASE", "http://localhost:8010")
 USE_LOCAL_MOCKS = _env_bool("USE_LOCAL_MOCKS", False)
 ROUTER_MODE = os.getenv("ROUTER_MODE", "semantic_enforce").strip().lower()
 if ROUTER_MODE not in {"rule", "semantic_shadow", "semantic_enforce"}:

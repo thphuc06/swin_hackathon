@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
+from pathlib import Path
 from urllib.parse import urlparse
 
 
@@ -33,6 +35,26 @@ def _ensure_backend_base(value: str) -> str:
     if not parsed.scheme.startswith("http"):
         raise ValueError("DEPLOY_BACKEND_API_BASE must start with http:// or https://")
     return backend.rstrip("/")
+
+
+def _sync_kb_assets() -> None:
+    """Copy KB markdown assets into agent build context before deploy."""
+    repo_root = Path(__file__).resolve().parent
+    source_dir = repo_root / "kb"
+    target_dir = repo_root / "agent" / "kb"
+    if not source_dir.exists():
+        raise FileNotFoundError(f"KB source directory not found: {source_dir}")
+
+    md_files = sorted(source_dir.glob("*.md"))
+    if not md_files:
+        raise FileNotFoundError(f"No KB markdown files found in: {source_dir}")
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for source_file in md_files:
+        target_file = target_dir / source_file.name
+        shutil.copy2(source_file, target_file)
+
+    print(f"Synchronized KB assets: {len(md_files)} files -> {target_dir}")
 
 
 def _build_env_vars() -> dict[str, str]:
@@ -82,6 +104,7 @@ def _build_env_vars() -> dict[str, str]:
 
 
 def deploy() -> None:
+    _sync_kb_assets()
     env_vars = _build_env_vars()
 
     print("Effective deploy env summary:")

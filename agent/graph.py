@@ -402,15 +402,72 @@ def _summary_range_days(summary: Dict[str, Any]) -> int:
     return _bucket_days(_safe_int(match.group(0), 30))
 
 
+_INVEST_ASSET_TERMS = [
+    "co phieu",
+    "chung khoan",
+    "crypto",
+    "coin",
+    "etf",
+    "stock",
+    "shares",
+    "share",
+    "portfolio",
+    "danh muc",
+    "trai phieu",
+    "bond",
+    "quy",
+    "fund",
+    "dau tu",
+]
+
+_NON_INVEST_PURCHASE_TERMS = [
+    "mua nha",
+    "mua can ho",
+    "mua xe",
+    "mua o to",
+    "mua oto",
+    "mua xe may",
+    "muc tieu tiet kiem",
+    "ke hoach tiet kiem",
+    "saving goal",
+    "buy house",
+    "buy home",
+    "buy car",
+]
+
+
+def _has_invest_asset_context(normalized: str) -> bool:
+    if any(term in normalized for term in _INVEST_ASSET_TERMS):
+        return True
+    return bool(
+        re.search(
+            r"\b(mua|buy|ban|sell)\s+(co phieu|chung khoan|crypto|coin|etf|stock|shares?|portfolio|trai phieu|bond)\b",
+            normalized,
+        )
+    )
+
+
+def _is_non_invest_purchase_goal(normalized: str) -> bool:
+    return any(term in normalized for term in _NON_INVEST_PURCHASE_TERMS)
+
+
 def _requested_action(prompt: str) -> str:
     normalized = _normalize_text(prompt)
+    has_invest_context = _has_invest_asset_context(normalized)
+    non_invest_goal = _is_non_invest_purchase_goal(normalized)
+
+    if non_invest_goal and not has_invest_context:
+        return "advice"
+
     recommendation_patterns = [
         (r"\b(co nen|nen|should i|is it a good time to)\s*(mua|buy)\b", "recommend_buy"),
         (r"\b(co nen|nen|should i|is it a good time to)\s*(ban|sell)\b", "recommend_sell"),
     ]
     for pattern, action in recommendation_patterns:
         if re.search(pattern, normalized):
-            return action
+            if has_invest_context:
+                return action
+            continue
 
     execution_patterns = [
         (r"\bdat lenh\b", "execute"),
@@ -418,14 +475,22 @@ def _requested_action(prompt: str) -> str:
         (r"\bexecute\b", "execute"),
         (r"\border\b", "order"),
         (r"\btrade\b", "trade"),
-        (r"\bbuy\b", "buy"),
-        (r"\bmua\b", "buy"),
-        (r"\bsell\b", "sell"),
-        (r"\bban\b", "sell"),
     ]
     for pattern, action in execution_patterns:
         if re.search(pattern, normalized):
             return action
+
+    if re.search(r"\b(buy|mua)\b", normalized):
+        if has_invest_context and not non_invest_goal:
+            return "buy"
+
+    if re.search(r"\bsell\b", normalized):
+        if has_invest_context:
+            return "sell"
+
+    if re.search(r"\bban\s+(co phieu|chung khoan|crypto|coin|etf|trai phieu|bond)\b", normalized):
+        if has_invest_context:
+            return "sell"
     return "advice"
 
 
@@ -1281,6 +1346,22 @@ def intent_router(state: AgentState) -> AgentState:
     if risk_appetite == "unknown" and semantic_decision.final_intent in {"planning", "scenario", "invest"}:
         semantic_decision.reason_codes = [*semantic_decision.reason_codes, "risk_appetite_missing_soft_question"]
 
+    if override_reason == "intent_override:service_priority_to_planning" and semantic_decision.clarify_needed:
+        clarify_reason_codes = {
+            code
+            for code in semantic_decision.reason_codes
+            if code in {"low_intent_confidence", "low_top2_gap", "low_scenario_confidence"}
+        }
+        if clarify_reason_codes == {"low_top2_gap"}:
+            semantic_decision = semantic_decision.model_copy(
+                update={
+                    "clarify_needed": False,
+                    "clarifying_question": None,
+                    "tool_bundle": tool_bundle_for_intent(semantic_decision.final_intent),
+                    "reason_codes": [code for code in semantic_decision.reason_codes if code != "low_top2_gap"],
+                }
+            )
+
     if semantic_decision.fallback_used:
         fallback = RouteDecisionV1(
             mode=effective_mode if effective_mode in {"semantic_shadow", "semantic_enforce"} else "semantic_enforce",
@@ -1394,7 +1475,16 @@ def retrieve_kb(state: AgentState) -> AgentState:
         return state
     query = _build_kb_query(state.get("prompt", ""), state.get("intent", ""))
     intent = state.get("intent", "")
-    state["kb"] = kb_retrieve(query, {"doc_type": "policy"}, state["user_token"], trace_id=state.get("trace_id"), intent=intent)
+    kb_filters = {"intent": str(intent or "").strip().lower()}
+    if str(intent or "").strip().lower() == "invest":
+        kb_filters["doc_type"] = "policy"
+    state["kb"] = kb_retrieve(
+        query,
+        kb_filters,
+        state["user_token"],
+        trace_id=state.get("trace_id"),
+        intent=intent,
+    )
     return state
 
 
@@ -1463,6 +1553,10 @@ def _execute_tool_safe(tool_name: str, state: AgentState, extraction_slots: Dict
             goal_id = str(extraction_slots.get("goal_id") or "").strip() or None
             target_amount = goal_request.get("target_amount")
             horizon_months = goal_request.get("horizon_months")
+            normalized_horizon = _safe_int(horizon_months, 0)
+            if normalized_horizon > 24:
+                # MCP contract currently supports max 24 months.
+                normalized_horizon = 24
             if target_amount is None and not goal_id:
                 return tool_name, {
                     "status": "insufficient_input",
@@ -1474,7 +1568,7 @@ def _execute_tool_safe(tool_name: str, state: AgentState, extraction_slots: Dict
                 state["user_token"],
                 user_id=state["user_id"],
                 target_amount=target_amount,
-                horizon_months=horizon_months if _safe_int(horizon_months, 0) > 0 else None,
+                horizon_months=normalized_horizon if normalized_horizon > 0 else None,
                 goal_id=goal_id,
                 trace_id=state["trace_id"],
             )

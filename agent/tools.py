@@ -123,15 +123,43 @@ def _should_use_local_mocks() -> bool:
     return True
 
 
+def _resolve_kb_dir() -> Path | None:
+    """Resolve KB directory across local repo and packaged runtime layouts."""
+    here = Path(__file__).resolve().parent
+    candidates: list[Path] = []
+
+    kb_dir_env = str(os.getenv("KB_DIR") or "").strip()
+    if kb_dir_env:
+        candidates.append(Path(kb_dir_env).expanduser())
+
+    candidates.extend(
+        [
+            here.parent / "kb",  # local repo layout: repo/agent/tools.py -> repo/kb
+            here / "kb",  # packaged runtime layout: /app/tools.py -> /app/kb
+            Path.cwd() / "kb",
+        ]
+    )
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        if candidate.exists() and candidate.is_dir():
+            return candidate
+    return None
+
+
 def _load_kb_files() -> Dict[str, Dict[str, Any]]:
     """Load all Knowledge Base markdown files from kb/ folder into memory.
     
     Returns:
         Dict mapping filename -> {content, sections, doc_type}
     """
-    kb_dir = Path(__file__).parent.parent / "kb"
-    if not kb_dir.exists():
-        logger.warning("KB directory not found: %s", kb_dir)
+    kb_dir = _resolve_kb_dir()
+    if kb_dir is None:
+        logger.warning("KB directory not found (checked KB_DIR, repo/kb, app/kb, cwd/kb)")
         return {}
     
     kb_content = {}

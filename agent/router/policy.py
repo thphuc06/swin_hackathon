@@ -77,10 +77,15 @@ def suggest_intent_override(prompt: str, extraction: IntentExtractionV1) -> tupl
     out_of_scope_score = _top2_score(extraction, "out_of_scope")
     invest_terms = [
         "co phieu",
+        "chung khoan",
         "crypto",
+        "coin",
         "etf",
-        "mua",
-        "ban",
+        "stock",
+        "shares",
+        "share",
+        "bond",
+        "trai phieu",
         "dau tu",
         "invest",
         "portfolio",
@@ -104,6 +109,45 @@ def suggest_intent_override(prompt: str, extraction: IntentExtractionV1) -> tupl
         "suspicious transaction",
         "unrecognized transaction",
     ]
+    planning_home_goal_terms = [
+        "mua nha",
+        "mua can ho",
+        "mua xe",
+        "mua o to",
+        "mua oto",
+        "muc tieu tiet kiem",
+        "ke hoach tiet kiem",
+        "saving goal",
+        "goal",
+        "saving plan",
+        "bao lau",
+        "kha thi",
+    ]
+    recurring_terms = [
+        "chi co dinh",
+        "chi dinh ky",
+        "dinh ky",
+        "moi thang",
+        "hang thang",
+        "thuong xuyen",
+        "fixed expense",
+        "fixed cost",
+        "recurring",
+        "auto debit",
+    ]
+    service_priority_terms = [
+        "dich vu ngan hang",
+        "uu tien dich vu",
+        "ngan hang nao truoc",
+        "banking service",
+        "service nao",
+    ]
+    cashflow_pressure_terms = [
+        "dong tien am",
+        "thieu hut dong tien",
+        "negative cashflow",
+        "cashflow am",
+    ]
     finance_terms = [
         "chi tieu",
         "tieu",
@@ -119,14 +163,27 @@ def suggest_intent_override(prompt: str, extraction: IntentExtractionV1) -> tupl
         "saving",
         "tiet kiem",
     ]
+    has_invest_terms = _contains_any(normalized, invest_terms) or bool(
+        re.search(
+            r"\b(mua|buy|ban|sell)\s+(co phieu|chung khoan|crypto|coin|etf|stock|shares?|portfolio|bond|trai phieu)\b",
+            normalized,
+        )
+    )
 
-    if extraction.intent == "invest" and _contains_any(normalized, optimize_terms) and not _contains_any(
-        normalized, invest_terms
-    ):
+    if extraction.intent == "invest" and _contains_any(normalized, optimize_terms) and not has_invest_terms:
         return "planning", "intent_override:invest_to_planning_optimize"
 
-    if extraction.intent in {"summary", "out_of_scope"} and _contains_any(normalized, anomaly_terms):
+    if _contains_any(normalized, anomaly_terms) and not has_invest_terms:
         return "risk", "intent_override:anomaly_to_risk"
+
+    if _contains_any(normalized, planning_home_goal_terms):
+        return "planning", "intent_override:home_goal_to_planning"
+
+    if _contains_any(normalized, recurring_terms):
+        return "planning", "intent_override:recurring_to_planning"
+
+    if _contains_any(normalized, service_priority_terms) and _contains_any(normalized, cashflow_pressure_terms):
+        return "planning", "intent_override:service_priority_to_planning"
 
     if (
         extraction.intent == "out_of_scope"

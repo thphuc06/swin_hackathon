@@ -10,7 +10,9 @@ cd c:\HCMUS\PYTHON\jars-fintech-agentcore-mvp\agent
 python genToken.py 2>&1 | Select-String "^AccessToken:" | % { ($_ -replace "^AccessToken:\s*","").Trim() } | Set-Variable token
 
 # 2. Test agent (expect 7-17s response)
-agentcore invoke --bearer-token $token '{"prompt": "Tóm tắt chi tiêu 30 ngày qua của tôi", "user_id": "demo-user"}'
+agentcore invoke --bearer-token $token '{"prompt": "Tóm tắt chi tiêu 30 ngày qua của tôi", "user_id": "demo-user", "authorization": "Bearer '"$token"'"}'
+
+> Lưu ý quan trọng: khi invoke trực tiếp bằng `agentcore invoke`, cần truyền thêm `authorization` trong payload để runtime gọi Gateway không bị `401/424`.
 
 # 3. Run full test suite (12 cases, ~15-20 min)
 cd ..
@@ -240,7 +242,7 @@ python genToken.py
 # Generate token and invoke in one command
 python genToken.py 2>&1 | Select-String "^AccessToken:" | % { ($_ -replace "^AccessToken:\s*","").Trim() } | Set-Variable token
 
-agentcore invoke --bearer-token $token '{"prompt": "Tóm tắt chi tiêu 30 ngày qua của tôi", "user_id": "demo-user"}'
+agentcore invoke --bearer-token $token '{"prompt": "Tóm tắt chi tiêu 30 ngày qua của tôi", "user_id": "demo-user", "authorization": "Bearer '"$token"'"}'
 ```
 
 **Expected Results:**
@@ -251,7 +253,7 @@ agentcore invoke --bearer-token $token '{"prompt": "Tóm tắt chi tiêu 30 ngà
 
 **Step 3: Simple Query Test**
 ```powershell
-agentcore invoke --bearer-token $token '{"prompt": "Chi tiêu của tôi tháng này là bao nhiêu?", "user_id": "demo-user"}'
+agentcore invoke --bearer-token $token '{"prompt": "Chi tiêu của tôi tháng này là bao nhiêu?", "user_id": "demo-user", "authorization": "Bearer '"$token"'"}'
 ```
 Expected: **< 10s** response time
 
@@ -374,7 +376,7 @@ agentcore status
 
 # Test immediately after deploy
 python genToken.py 2>&1 | Select-String "^AccessToken:" | % { ($_ -replace "^AccessToken:\s*","").Trim() } | Set-Variable token
-agentcore invoke --bearer-token $token '{"prompt": "Hello test", "user_id": "demo-user"}'
+agentcore invoke --bearer-token $token '{"prompt": "Hello test", "user_id": "demo-user", "authorization": "Bearer '"$token"'"}'
 ```
 
 **Expected Build Time:** 30-40 seconds  

@@ -46,10 +46,42 @@ except Exception as exc:
     logger.warning("Startup: Tool registry initialization failed: %s (will fall back to lazy loading)", exc)
 
 
+def _authorization_from_context(context: Any | None) -> str:
+    if context is None:
+        return ""
+
+    request_headers = getattr(context, "request_headers", None)
+    if isinstance(request_headers, dict):
+        for key, value in request_headers.items():
+            if str(key).lower() == "authorization" and isinstance(value, str) and value.strip():
+                return value.strip()
+
+    request = getattr(context, "request", None)
+    headers = getattr(request, "headers", None) if request is not None else None
+    if headers is not None:
+        value = headers.get("Authorization") or headers.get("authorization")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    return ""
+
+
+def _resolve_user_token(payload: Dict[str, Any], context: Any | None) -> str:
+    payload_token = payload.get("authorization")
+    if isinstance(payload_token, str) and payload_token.strip():
+        return payload_token.strip()
+
+    context_token = _authorization_from_context(context)
+    if context_token:
+        return context_token
+
+    return os.getenv("DEFAULT_USER_TOKEN", "")
+
+
 @app.entrypoint
-def invoke(payload: Dict[str, Any]) -> Dict[str, Any]:
+def invoke(payload: Dict[str, Any], context: Any | None = None) -> Dict[str, Any]:
     prompt = payload.get("prompt", "")
-    user_token = payload.get("authorization", os.getenv("DEFAULT_USER_TOKEN", ""))
+    user_token = _resolve_user_token(payload, context)
     user_id = payload.get("user_id", "demo-user")
     result = run_agent(prompt=prompt, user_token=user_token, user_id=user_id)
     response_meta = result.get("response_meta", {}) if isinstance(result.get("response_meta"), dict) else {}

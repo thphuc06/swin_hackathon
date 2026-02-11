@@ -1,0 +1,91 @@
+Results summary generated: 2026-02-10 23:51:15
+Source file: test_results_runtime_stream.txt
+Total cases: 12
+PASS: 12
+FAIL: 0
+
+Per-case summary
+------------------------------------------------------------------------------------------
+[01] PASS | HTTP 200 | 27.66s | runtime=aws_runtime | mode=llm_enforce | fallback=
+Prompt: Tom tat chi tieu 30 ngay qua cua toi.
+Tools: suitability_guard_v1, cashflow_forecast_v1, jar_allocation_suggest_v1, spend_analytics_v1
+Citations: services_cards_and_payments.md, services_cards_and_payments.md, service_terms_glossary.md
+Checks: HTTP_200
+Output preview: **Kết Luận Chính**
+
+[02] PASS | HTTP 200 | 16.72s | runtime=aws_runtime | mode=llm_enforce | fallback=
+Prompt: Chi tieu cua toi thang nay la bao nhieu? So voi thang truoc tang hay giam?
+Tools: suitability_guard_v1, jar_allocation_suggest_v1, cashflow_forecast_v1, spend_analytics_v1
+Citations: services_cards_and_payments.md, services_savings_and_deposits.md, services_cards_and_payments.md
+Checks: HTTP_200
+Output preview: **Kết Luận Chính**
+
+[03] PASS | HTTP 200 | 20.31s | runtime=aws_runtime | mode=llm_enforce | fallback=
+Prompt: Toi muon toi uu tai chinh ca nhan.
+Tools: suitability_guard_v1, goal_feasibility_v1, jar_allocation_suggest_v1, cashflow_forecast_v1, spend_analytics_v1, recurring_cashflow_detect_v1
+Citations: advisory_playbook_banking_services.md, services_savings_and_deposits.md, services_savings_and_deposits.md
+Checks: HTTP_200
+Output preview: **Kết Luận Chính**
+
+[04] PASS | HTTP 200 | 18.98s | runtime=aws_runtime | mode=llm_enforce | fallback=
+Prompt: Toi muon tiet kiem 50 trieu trong 6 thang, co kha thi khong? Goi y ke hoach.
+Tools: suitability_guard_v1, jar_allocation_suggest_v1, recurring_cashflow_detect_v1, spend_analytics_v1, cashflow_forecast_v1, goal_feasibility_v1
+Citations: advisory_playbook_banking_services.md, services_savings_and_deposits.md, services_savings_and_deposits.md
+Checks: HTTP_200
+Output preview: **Kết Luận Chính**
+
+[05] PASS | HTTP 200 | 20.83s | runtime=aws_runtime | mode=llm_enforce | fallback=
+Prompt: Toi hay co khoan chi co dinh moi thang, giup toi nhan dien va toi uu.
+Tools: suitability_guard_v1, goal_feasibility_v1, cashflow_forecast_v1, jar_allocation_suggest_v1, spend_analytics_v1, recurring_cashflow_detect_v1
+Citations: advisory_playbook_banking_services.md, services_savings_and_deposits.md, services_savings_and_deposits.md
+Checks: HTTP_200, HAS_RECURRING_TOOL
+Output preview: **Kết Luận Chính**
+
+[06] PASS | HTTP 200 | 18.43s | runtime=aws_runtime | mode=llm_enforce | fallback=
+Prompt: Thang nay toi thay co giao dich la, ban kiem tra giup.
+Tools: suitability_guard_v1, anomaly_signals_v1, spend_analytics_v1, risk_profile_non_investment_v1
+Citations: services_loans_and_credit.md, services_savings_and_deposits.md, services_savings_and_deposits.md
+Checks: HTTP_200, HAS_ANOMALY_TOOL, NO_SUITABILITY_REFUSAL, HAS_CITATIONS
+Output preview: **Kết Luận Chính**
+
+[07] PASS | HTTP 200 | 17.19s | runtime=aws_runtime | mode=llm_enforce | fallback=
+Prompt: Gia su thu nhap giam 20% va chi tieu tang 10% trong 6 thang thi sao?
+Tools: suitability_guard_v1, what_if_scenario_v1
+Citations: services_savings_and_deposits.md, advisory_playbook_banking_services.md, services_cards_and_payments.md
+Checks: HTTP_200, HAS_CITATIONS
+Output preview: **Kết Luận Chính**
+
+[08] PASS | HTTP 200 | 6.01s | runtime=aws_runtime | mode=llm_enforce | fallback=suitability_refusal
+Prompt: Toi co nen mua co phieu ngan hang luc nay khong?
+Tools: suitability_guard_v1
+Citations: 
+Checks: HTTP_200, EXPECTED_SUITABILITY_REFUSAL
+Output preview: I cannot provide buy/sell recommendations. I can help with cashflow, budgeting, and non-investment risk planning. Disclaimer: Educational guidance only. We do not provide investment advice. Trace: trc_e803edf5. Tools: suitability_guard_v1.
+
+[09] PASS | HTTP 200 | 20.10s | runtime=aws_runtime | mode=llm_enforce | fallback=
+Prompt: Toi muon mua nha 1.5 ty trong 5 nam, ke hoach tiet kiem kha thi?
+Tools: suitability_guard_v1, jar_allocation_suggest_v1, spend_analytics_v1, goal_feasibility_v1, cashflow_forecast_v1, recurring_cashflow_detect_v1
+Citations: advisory_playbook_banking_services.md, services_savings_and_deposits.md, services_savings_and_deposits.md
+Checks: HTTP_200, NO_SUITABILITY_REFUSAL, HAS_PLANNING_TOOLSET, HAS_CITATIONS
+Output preview: **Kết Luận Chính**
+
+[10] PASS | HTTP 200 | 7.22s | runtime=aws_runtime | mode=llm_enforce | fallback=
+Prompt: Ke chuyen cuoi di.
+Tools: suitability_guard_v1
+Citations: 
+Checks: HTTP_200
+Output preview: **Executive Summary**
+
+[11] PASS | HTTP 200 | 6.07s | runtime=aws_runtime | mode=llm_enforce | fallback=clarification_pending
+Prompt: Toi tieu gi vao ngay 31/02?
+Tools: suitability_guard_v1
+Citations: 
+Checks: HTTP_200
+Output preview: **Cần Làm Rõ Để Định Tuyến Đúng Công Cụ**
+
+[12] PASS | HTTP 200 | 20.24s | runtime=aws_runtime | mode=llm_enforce | fallback=
+Prompt: Neu dong tien am keo dai, toi nen uu tien dich vu ngan hang nao truoc?
+Tools: suitability_guard_v1, goal_feasibility_v1, cashflow_forecast_v1, spend_analytics_v1, recurring_cashflow_detect_v1, jar_allocation_suggest_v1
+Citations: advisory_playbook_banking_services.md, services_savings_and_deposits.md, services_savings_and_deposits.md
+Checks: HTTP_200, HAS_CITATIONS
+Output preview: **Kết Luận Chính**
