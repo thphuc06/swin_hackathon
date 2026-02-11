@@ -137,7 +137,8 @@ def _build_prompt(
         "- If generated metric wording conflicts with fact semantics, rewrite wording to match fact meaning.\n"
         "When facts include kb.service_category.*, include at least one practical banking service suggestion in actions.\n"
         "Map service suggestion to context: savings_capacity -> savings/deposit; goal_gap or negative cashflow -> loan/credit support; spend anomaly -> card/payment control.\n"
-        "If fact anomaly.latest_change_point.90d exists and context is risk/anomaly (or user asks anomaly date/time), include it explicitly in summary_lines and key_metrics.\n"
+        "If any fact with prefix anomaly.latest_change_point. exists and context is risk/anomaly (or user asks anomaly date/time), include it explicitly in summary_lines and key_metrics.\n"
+        "If facts include anomaly.flag_reason.* and context is risk/anomaly, explicitly explain one or two top anomaly reasons in summary_lines.\n"
         "Do not expose internal fact IDs, insight IDs, action IDs, or tool IDs in prose.\n"
         "When scenario best variant is base, still provide concrete next actions grounded by available facts.\n"
         "If data is missing, write it in limitations without inventing facts.\n"
@@ -367,6 +368,12 @@ def _sanitize_prose_line(text: str, *, language: str) -> str:
             "Giới hạn: Không có thông tin về sử thàch của ngươi dùng.": (
                 "Giới hạn: Không có thông tin về sở thích của người dùng."
             ),
+            "Co the can nhac goi tiet kiem dinh ky hoac tiet kiem ky han de tang ky luat tich luy.": (
+                "Có thể cân nhắc gói tiết kiệm định kỳ hoặc tiết kiệm kỳ hạn để tăng kỷ luật tích lũy."
+            ),
+            "Có thể cần nhắc gọi tiết kiệm định kỳ hoặc tiết kiệm kỳ hạn để tăng ký lưu tích lũy.": (
+                "Có thể cân nhắc gói tiết kiệm định kỳ hoặc tiết kiệm kỳ hạn để tăng kỷ luật tích lũy."
+            ),
         }
         for src, dst in replacements.items():
             line = line.replace(src, dst)
@@ -389,6 +396,10 @@ def _sanitize_prose_line(text: str, *, language: str) -> str:
             (r"\bso thich\b", "sở thích"),
             (r"\bdich vu tiet kiem\b", "dịch vụ tiết kiệm"),
             (r"\btang toc tich luy\b", "tăng tốc tích lũy"),
+            (r"\bgoi tiet kiem\b", "gói tiết kiệm"),
+            (r"\bgoi vay\b", "gói vay"),
+            (r"\bgui tiet kiem\b", "gửi tiết kiệm"),
+            (r"\bky luu tich luy\b", "kỷ luật tích lũy"),
         ]
         for pattern, replacement in vi_phrase_replacements:
             line = re.sub(pattern, replacement, line, flags=re.IGNORECASE)
@@ -412,6 +423,26 @@ def _sanitize_prose_lines(lines: Iterable[str], *, language: str) -> list[str]:
         if cleaned:
             sanitized.append(cleaned)
     return sanitized
+
+
+def _dedupe_actions(actions: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for action in actions:
+        text = str(action or "").strip()
+        if not text:
+            continue
+        key = _normalize_prompt_for_match(text)
+        if not key:
+            continue
+        if any(marker in key for marker in ["khau vi rui ro", "muc rui ro", "risk appetite"]):
+            key = "risk_appetite_follow_up"
+        key = re.sub(r"\s+", " ", key).strip()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(text)
+    return deduped
 
 
 def _normalize_prompt_for_match(text: str) -> str:
@@ -521,10 +552,289 @@ def _has_anomaly_context(user_prompt: str, intent: str) -> bool:
     return str(intent or "").strip().lower() == "risk"
 
 
-def _should_force_anomaly_date(user_prompt: str, intent: str, valid_fact_ids: set[str]) -> bool:
-    if "anomaly.latest_change_point.90d" not in valid_fact_ids:
+def _asks_anomaly_reason(user_prompt: str) -> bool:
+    normalized = _normalize_prompt_for_match(user_prompt)
+    asks_reason = any(
+        term in normalized
+        for term in [
+            "la gi",
+            "gi vay",
+            "vi sao",
+            "tai sao",
+            "what is",
+            "what are",
+            "why",
+        ]
+    )
+    anomaly_hint = any(
+        term in normalized
+        for term in [
+            "canh bao",
+            "bat thuong",
+            "giao dich la",
+            "anomaly",
+            "flag",
+        ]
+    )
+    return asks_reason and anomaly_hint
+
+
+def _requested_anomaly_reason_limit(user_prompt: str, *, default: int = 2, max_limit: int = 5) -> int:
+    normalized = _normalize_prompt_for_match(user_prompt)
+    if not normalized:
+        return default
+    if "tat ca canh bao" in normalized or "all anomaly" in normalized:
+        return max_limit
+
+    match = re.search(r"(\d+)\s*(canh bao|ly do|reasons?|alerts?)", normalized)
+    if match:
+        try:
+            return max(1, min(max_limit, int(match.group(1))))
+        except ValueError:
+            return default
+
+    word_to_num = {
+        "mot": 1,
+        "một": 1,
+        "hai": 2,
+        "ba": 3,
+        "bon": 4,
+        "bốn": 4,
+        "nam": 5,
+        "năm": 5,
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+    }
+    for word, value in word_to_num.items():
+        if re.search(rf"\b{re.escape(word)}\b\s*(canh bao|ly do|reasons?|alerts?)", normalized):
+            return max(1, min(max_limit, value))
+    return default
+
+
+def _resolve_anomaly_latest_fact_id(valid_fact_ids: set[str]) -> str:
+    candidates = [item for item in valid_fact_ids if item.startswith("anomaly.latest_change_point.")]
+    if not candidates:
+        return ""
+
+    def _sort_key(fact_id: str) -> int:
+        match = re.search(r"(\d+)d$", fact_id)
+        if not match:
+            return -1
+        return int(match.group(1))
+
+    candidates.sort(key=_sort_key, reverse=True)
+    return candidates[0]
+
+
+def _resolve_anomaly_count_fact_id(valid_fact_ids: set[str]) -> str:
+    candidates = [item for item in valid_fact_ids if item.startswith("anomaly.flags_count.")]
+    if not candidates:
+        return ""
+
+    def _sort_key(fact_id: str) -> int:
+        match = re.search(r"(\d+)d$", fact_id)
+        if not match:
+            return -1
+        return int(match.group(1))
+
+    candidates.sort(key=_sort_key, reverse=True)
+    return candidates[0]
+
+
+def _resolve_anomaly_reason_fact_ids(valid_fact_ids: set[str], *, limit: int = 2) -> list[str]:
+    ranked: list[tuple[int, int, str]] = []
+    pattern = re.compile(r"^anomaly\.flag_reason\.(\d+)\.(\d+)d$")
+    for fact_id in valid_fact_ids:
+        match = pattern.match(fact_id)
+        if not match:
+            continue
+        rank = int(match.group(1))
+        window_days = int(match.group(2))
+        ranked.append((rank, window_days, fact_id))
+    if not ranked:
+        return []
+    max_window = max(item[1] for item in ranked)
+    selected = [item for item in ranked if item[1] == max_window]
+    selected.sort(key=lambda item: (item[0], item[2]))
+    return [item[2] for item in selected[: max(1, limit)]]
+
+
+def _should_force_anomaly_date(user_prompt: str, intent: str, anomaly_latest_fact_id: str) -> bool:
+    if not anomaly_latest_fact_id:
         return False
     return _asks_anomaly_date(user_prompt) or _has_anomaly_context(user_prompt, intent)
+
+
+def _should_force_anomaly_reasons(user_prompt: str, intent: str, anomaly_reason_fact_ids: list[str]) -> bool:
+    if not anomaly_reason_fact_ids:
+        return False
+    return _has_anomaly_context(user_prompt, intent) or _asks_anomaly_reason(user_prompt)
+
+
+def _has_existing_anomaly_reason_summary(summary_lines: list[str]) -> bool:
+    for line in summary_lines:
+        normalized = _normalize_prompt_for_match(line)
+        if _is_anomaly_reason_line(normalized):
+            return True
+    return False
+
+
+def _is_anomaly_reason_line(normalized_line: str) -> bool:
+    has_reason_word = any(term in normalized_line for term in ["ly do", "reason", "vi sao"])
+    has_anomaly_word = any(
+        term in normalized_line
+        for term in ["canh bao", "bat thuong", "anomaly", "giao dich la", "runway", "category", "danh muc", "grocery"]
+    )
+    return has_reason_word and has_anomaly_word
+
+
+def _normalize_anomaly_semantics_line(line: str, *, language: str) -> str:
+    text = str(line or "")
+    if language == "vi":
+        text = re.sub(r"(?i)\bgiao dịch bất thường\b", "cảnh báo bất thường", text)
+        text = re.sub(r"(?i)\bgiao dich bat thuong\b", "cảnh báo bất thường", text)
+    else:
+        text = re.sub(r"(?i)\babnormal transaction(s)?\b", "anomaly signal\\1", text)
+    return text
+
+
+def _normalize_vi_risk_wording_line(line: str, *, language: str) -> str:
+    text = str(line or "")
+    if language != "vi":
+        return text
+
+    normalized = _normalize_prompt_for_match(text)
+    is_risk_line = any(marker in normalized for marker in ["muc rui ro", "mức rủi ro", "risk band", "khau vi rui ro"])
+    if not is_risk_line:
+        return text
+
+    replacements = {
+        r"(?i)\bmoderate\b": "trung bình",
+        r"(?i)\bmedium\b": "trung bình",
+        r"(?i)\blow\b": "thấp",
+        r"(?i)\bhigh\b": "cao",
+        r"(?i)\bunknown\b": "chưa xác định",
+    }
+    for pattern, replacement in replacements.items():
+        text = re.sub(pattern, replacement, text)
+    return text
+
+
+def _ensure_anomaly_count_summary_line(
+    summary_lines: list[str],
+    *,
+    user_prompt: str,
+    intent: str,
+    anomaly_count_fact_id: str,
+    language: str,
+) -> list[str]:
+    if not anomaly_count_fact_id:
+        return summary_lines
+    if not _has_anomaly_context(user_prompt, intent):
+        return summary_lines
+
+    has_count_line = any(
+        anomaly_count_fact_id in line
+        or (
+            "canh bao bat thuong" in _normalize_prompt_for_match(line)
+            and "giao dich bat thuong" not in _normalize_prompt_for_match(line)
+        )
+        for line in summary_lines
+    )
+    if has_count_line:
+        return summary_lines
+
+    canonical_line = (
+        f"Có [F:{anomaly_count_fact_id}] cảnh báo bất thường (dấu hiệu giao dịch lạ) trong cửa sổ hiện tại."
+        if language == "vi"
+        else f"There are [F:{anomaly_count_fact_id}] anomaly alerts in the current window."
+    )
+    if len(summary_lines) < 5:
+        return [canonical_line, *summary_lines]
+
+    reason_lines: list[str] = []
+    date_lines: list[str] = []
+    other_lines: list[str] = []
+    for line in summary_lines:
+        normalized = _normalize_prompt_for_match(line)
+        if _is_anomaly_reason_line(normalized):
+            reason_lines.append(line)
+            continue
+        if _is_anomaly_date_line(normalized):
+            date_lines.append(line)
+            continue
+        other_lines.append(line)
+
+    selected: list[str] = [canonical_line]
+    for line in reason_lines:
+        if len(selected) >= 5:
+            break
+        selected.append(line)
+    if len(selected) < 5 and date_lines:
+        selected.append(date_lines[0])
+    for line in other_lines:
+        if len(selected) >= 5:
+            break
+        selected.append(line)
+    return selected[:5]
+
+
+def _canonical_anomaly_reason_line(fact_id: str, *, index: int, language: str) -> str:
+    if language == "vi":
+        return f"Lý do cảnh báo nổi bật {index}: [F:{fact_id}]"
+    return f"Top anomaly reason {index}: [F:{fact_id}]"
+
+
+def _is_anomaly_date_line(normalized_line: str) -> bool:
+    return ("ngay" in normalized_line and "bat thuong" in normalized_line) or (
+        "date" in normalized_line and "anomaly" in normalized_line
+    )
+
+
+def _enforce_anomaly_reason_summary_lines(
+    summary_lines: list[str],
+    *,
+    user_prompt: str,
+    intent: str,
+    language: str,
+    anomaly_reason_fact_ids: list[str],
+) -> list[str]:
+    if not _has_anomaly_context(user_prompt, intent):
+        return summary_lines
+    if not anomaly_reason_fact_ids:
+        return summary_lines
+
+    canonical_reason_lines = [
+        _canonical_anomaly_reason_line(fact_id, index=index, language=language)
+        for index, fact_id in enumerate(anomaly_reason_fact_ids, start=1)
+    ]
+    non_reason_lines: list[str] = []
+    for line in summary_lines:
+        normalized = _normalize_prompt_for_match(line)
+        if _is_anomaly_reason_line(normalized):
+            continue
+        non_reason_lines.append(line)
+
+    max_non_reason = max(1, 5 - len(canonical_reason_lines))
+    selected_non_reason = non_reason_lines[:max_non_reason]
+
+    if non_reason_lines:
+        has_date_line_in_selected = any(_is_anomaly_date_line(_normalize_prompt_for_match(line)) for line in selected_non_reason)
+        if not has_date_line_in_selected:
+            first_date_line = next(
+                (line for line in non_reason_lines if _is_anomaly_date_line(_normalize_prompt_for_match(line))),
+                "",
+            )
+            if first_date_line:
+                if len(selected_non_reason) >= max_non_reason:
+                    selected_non_reason = [*selected_non_reason[: max_non_reason - 1], first_date_line]
+                else:
+                    selected_non_reason.append(first_date_line)
+
+    return [*selected_non_reason, *canonical_reason_lines]
 
 
 def _fallback_summary_lines(language: str) -> list[str]:
@@ -586,15 +896,31 @@ def _sanitize_answer_payload(
     normalized["schema_version"] = "answer_plan_v2"
 
     summary_lines = _coerce_str_list(normalized.get("summary_lines"))
-    force_anomaly_date = _should_force_anomaly_date(user_prompt, intent, valid_fact_ids)
-    if force_anomaly_date:
+    anomaly_latest_fact_id = _resolve_anomaly_latest_fact_id(valid_fact_ids)
+    anomaly_count_fact_id = _resolve_anomaly_count_fact_id(valid_fact_ids)
+    reason_limit = _requested_anomaly_reason_limit(user_prompt, default=2, max_limit=5)
+    anomaly_reason_fact_ids = _resolve_anomaly_reason_fact_ids(valid_fact_ids, limit=reason_limit)
+    force_anomaly_reasons = _should_force_anomaly_reasons(user_prompt, intent, anomaly_reason_fact_ids)
+    has_existing_reason_summary = _has_existing_anomaly_reason_summary(summary_lines)
+    if force_anomaly_reasons and not has_existing_reason_summary:
+        for index, fact_id in enumerate(anomaly_reason_fact_ids, start=1):
+            forced_line = _canonical_anomaly_reason_line(fact_id, index=index, language=language)
+            has_reason_line = any(fact_id in line for line in summary_lines)
+            if not has_reason_line:
+                if len(summary_lines) < 5:
+                    summary_lines.append(forced_line)
+                else:
+                    summary_lines[-1] = forced_line
+
+    force_anomaly_date = _should_force_anomaly_date(user_prompt, intent, anomaly_latest_fact_id)
+    if force_anomaly_date and anomaly_latest_fact_id:
         forced_line = (
-            "Ngay bat thuong gan nhat la [F:anomaly.latest_change_point.90d]."
+            f"Ngày bất thường gần nhất là [F:{anomaly_latest_fact_id}]."
             if language == "vi"
-            else "The latest anomaly date is [F:anomaly.latest_change_point.90d]."
+            else f"The latest anomaly date is [F:{anomaly_latest_fact_id}]."
         )
         has_anomaly_date_line = any(
-            "anomaly.latest_change_point.90d" in line
+            anomaly_latest_fact_id in line
             or (
                 "ngay" in _normalize_prompt_for_match(line)
                 and "bat thuong" in _normalize_prompt_for_match(line)
@@ -610,6 +936,49 @@ def _sanitize_answer_payload(
                 summary_lines.append(forced_line)
             else:
                 summary_lines[-1] = forced_line
+    if _asks_anomaly_date(user_prompt) and _has_anomaly_context(user_prompt, intent) and not anomaly_latest_fact_id:
+        missing_line = (
+            (
+                f"Chưa đủ dữ liệu để xác định ngày bất thường cụ thể trong cửa sổ [F:{anomaly_count_fact_id}]."
+                if anomaly_count_fact_id
+                else "Chưa đủ dữ liệu để xác định ngày bất thường cụ thể trong cửa sổ hiện tại."
+            )
+            if language == "vi"
+            else (
+                f"There is not enough data to determine a specific anomaly date in the current window [F:{anomaly_count_fact_id}]."
+                if anomaly_count_fact_id
+                else "There is not enough data to determine a specific anomaly date in the current window."
+            )
+        )
+        has_missing_date_line = any(
+            "xac dinh ngay bat thuong" in _normalize_prompt_for_match(line)
+            or "specific anomaly date" in _normalize_prompt_for_match(line)
+            for line in summary_lines
+        )
+        if not has_missing_date_line:
+            if len(summary_lines) < 5:
+                summary_lines.append(missing_line)
+            else:
+                summary_lines[-1] = missing_line
+    if force_anomaly_reasons:
+        summary_lines = _enforce_anomaly_reason_summary_lines(
+            summary_lines,
+            user_prompt=user_prompt,
+            intent=intent,
+            language=language,
+            anomaly_reason_fact_ids=anomaly_reason_fact_ids,
+        )
+    summary_lines = [
+        _normalize_vi_risk_wording_line(_normalize_anomaly_semantics_line(line, language=language), language=language)
+        for line in summary_lines
+    ]
+    summary_lines = _ensure_anomaly_count_summary_line(
+        summary_lines,
+        user_prompt=user_prompt,
+        intent=intent,
+        anomaly_count_fact_id=anomaly_count_fact_id,
+        language=language,
+    )
     summary_lines = _sanitize_prose_lines(summary_lines, language=language)
     if len(summary_lines) < 3:
         summary_lines = [*summary_lines, *_fallback_summary_lines(language)]
@@ -619,16 +988,26 @@ def _sanitize_answer_payload(
     key_metrics = [item for item in key_metrics if str(item.get("fact_id") or "").strip() in valid_fact_ids]
     if not key_metrics and valid_fact_ids:
         key_metrics = [{"fact_id": fact_id, "label": ""} for fact_id in sorted(valid_fact_ids)[:3]]
-    if force_anomaly_date:
+    if force_anomaly_date and anomaly_latest_fact_id:
         has_change_point_metric = any(
-            str(item.get("fact_id") or "").strip() == "anomaly.latest_change_point.90d"
+            str(item.get("fact_id") or "").strip() == anomaly_latest_fact_id
             for item in key_metrics
         )
         if not has_change_point_metric:
             key_metrics = [
-                {"fact_id": "anomaly.latest_change_point.90d", "label": "Ngày bất thường gần nhất"},
+                {"fact_id": anomaly_latest_fact_id, "label": "Ngày bất thường gần nhất"},
                 *key_metrics,
             ]
+    if force_anomaly_reasons:
+        for index, fact_id in enumerate(anomaly_reason_fact_ids, start=1):
+            has_reason_metric = any(
+                str(item.get("fact_id") or "").strip() == fact_id
+                for item in key_metrics
+            )
+            if has_reason_metric:
+                continue
+            metric_label = f"Lý do cảnh báo {index}" if language == "vi" else f"Anomaly reason {index}"
+            key_metrics = [{"fact_id": fact_id, "label": metric_label}, *key_metrics]
     normalized["key_metrics"] = key_metrics
 
     actions = _coerce_str_list(normalized.get("actions"))
@@ -653,6 +1032,7 @@ def _sanitize_answer_payload(
         if not any(any(marker in item.lower() for marker in follow_up_markers) for item in actions):
             actions = [follow_up_line, *actions]
     actions = _sanitize_prose_lines(actions, language=language)
+    actions = _dedupe_actions(actions)
     if len(actions) < 2:
         actions = [*actions, *_fallback_actions(language)]
     normalized["actions"] = actions[:4]

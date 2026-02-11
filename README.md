@@ -16,7 +16,7 @@ agentcore invoke --bearer-token $token '{"prompt": "Tóm tắt chi tiêu 30 ngà
 
 # 3. Run full test suite (12 cases, ~15-20 min)
 cd ..
-.\agent_test_runner.ps1 -Token $token
+python .\run_qa_tests.py --base-url http://127.0.0.1:8010 --token $token
 ```
 
 **Expected:** ✅ Sub-20s responses, no timeout errors, Gateway authentication working
@@ -263,7 +263,7 @@ Expected: **< 10s** response time
 # Run all 12 test cases (15-20 minutes)
 cd c:\HCMUS\PYTHON\jars-fintech-agentcore-mvp
 python agent/genToken.py 2>&1 | Select-String "^AccessToken:" | % { ($_ -replace "^AccessToken:\s*","").Trim() } | Set-Variable token
-.\agent_test_runner.ps1 -Token $token
+python .\run_qa_tests.py --base-url http://127.0.0.1:8010 --token $token
 ```
 
 Test cases cover:
@@ -283,6 +283,52 @@ Test cases cover:
 -   `verify_gateway_tools.py`: Tests direct connectivity to the Gateway and specific tool execution.
 -   `run_qa_tests.py`: Runs a full conversational test suite against the deployed agent. Ensure `TEST_USER_ID` is set correctly in the script.ired
 - Fix: Redeploy agent with fresh service token (see Deploy section below)
+
+### Local Backend + `/chat/stream` QA (avoid common confusion)
+
+Use this flow right after each deploy to validate runtime behavior from local backend.
+
+1) Ensure backend Cognito settings match agent token issuer
+```powershell
+cd C:\HCMUS\PYTHON\jars-fintech-agentcore-mvp
+Get-Content .\agent\.env   | Select-String '^(AWS_REGION|COGNITO_USER_POOL_ID|COGNITO_CLIENT_ID)='
+Get-Content .\backend\.env | Select-String '^(AWS_REGION|COGNITO_USER_POOL_ID|COGNITO_CLIENT_ID|DEV_BYPASS_AUTH)='
+```
+
+2) Free port 8010 and restart backend with explicit env
+```powershell
+# Kill existing listener on 8010 (if any)
+Get-NetTCPConnection -LocalPort 8010 -State Listen -ErrorAction SilentlyContinue | % { Stop-Process -Id $_.OwningProcess -Force }
+
+cd C:\HCMUS\PYTHON\jars-fintech-agentcore-mvp\backend
+$env:AWS_REGION = "us-east-1"
+$env:DEV_BYPASS_AUTH = "false"
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8010
+```
+
+3) In another terminal, generate AccessToken and run full QA
+```powershell
+cd C:\HCMUS\PYTHON\jars-fintech-agentcore-mvp
+$token = (python .\agent\genToken.py 2>&1 | Select-String '^AccessToken:' | % { ($_ -replace '^AccessToken:\s*','').Trim() })
+python .\run_qa_tests.py --base-url http://127.0.0.1:8010 --token $token
+```
+
+4) Check outputs
+```powershell
+Get-Content .\results.txt
+Get-Content .\test_results_runtime_stream.txt -TotalCount 120
+```
+
+Expected:
+- `runtime=aws_runtime` when backend is configured with `AGENTCORE_RUNTIME_ARN`
+- `CASE_05` has `recurring_cashflow_detect_v1`
+- `CASE_06` has `anomaly_signals_v1` and no suitability refusal
+- `CASE_08` is `suitability_refusal`
+- `CASE_09` is planning and has citations
+
+If you get `401 {"detail":"Unknown key"}`:
+- Restart backend after env changes (JWKS is cached in-process).
+- Ensure backend is started with `AWS_REGION=us-east-1` (wrong region causes wrong JWKS URL).
 
 **Issue: 424 Failed Dependency**  
 - Cause: Gateway authentication failed or MCP server down

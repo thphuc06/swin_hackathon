@@ -1,0 +1,464 @@
+TOOLS COVERAGE TEST REPORT (UTF-8)
+Generated at: 2026-02-11 17:01:08
+Base URL: http://127.0.0.1:8010/chat/stream
+
+========================================================================================================================
+[C01_15D_SUMMARY] PASS
+Prompt: 15 ngày qua dòng tiền của tôi thế nào?
+HTTP: 200 | Time: 27.27s | Runtime: aws_runtime | Mode: llm_enforce | Fallback: 
+ReasonCodes: clean_utf8, normalized_nfc
+Tools: suitability_guard_v1, jar_allocation_suggest_v1, cashflow_forecast_v1, spend_analytics_v1
+Checks: HTTP_200
+Citations: services_cards_and_payments.md, services_savings_and_deposits.md, services_cards_and_payments.md
+Trace: trc_873f09ee
+OutputFull:
+**Tổng Quan Chính**
+- Dòng tiền ròng của bạn trong 15 ngày qua là -151,536,000, do tổng chi tiêu 151,536,000 cao hơn tổng thu nhập 0.
+- Thu nhập dự báo trung bình hàng tuần là 140,289,375, trong khi chi tiêu dự báo trung bình hàng tuần là 149,766,238.33.
+- Nhóm chi tiêu ưu tiên hiện tại là 'Bills' với tỉ lệ phân bổ 14.08%.
+**Khuyến Nghị Tư Vấn**
+1. Xem xét việc thiết lập hạn mức chi tiêu thẻ và cảnh báo giao dịch để kiểm soát nhóm chi lớn.
+2. Tối ưu hóa phân bổ chi tiêu trong nhóm 'Bills' để cân bằng dòng tiền ròng.
+**Giả Định Và Giới Hạn Dữ Liệu**
+- Giới hạn: Không có dữ liệu về khẩu vị rủi ro của bạn, vui lòng cung cấp thông tin này để có hướng dẫn chính xác hơn.
+**Disclaimer**
+- Educational guidance only. We do not provide investment advice.
+RAW_SSE:
+data: **Tổng Quan Chính**
+data: - Dòng tiền ròng của bạn trong 15 ngày qua là -151,536,000, do tổng chi tiêu 151,536,000 cao hơn tổng thu nhập 0.
+data: - Thu nhập dự báo trung bình hàng tuần là 140,289,375, trong khi chi tiêu dự báo trung bình hàng tuần là 149,766,238.33.
+data: - Nhóm chi tiêu ưu tiên hiện tại là 'Bills' với tỉ lệ phân bổ 14.08%.
+data: 
+data: **Khuyến Nghị Tư Vấn**
+data: 1. Xem xét việc thiết lập hạn mức chi tiêu thẻ và cảnh báo giao dịch để kiểm soát nhóm chi lớn.
+data: 2. Tối ưu hóa phân bổ chi tiêu trong nhóm 'Bills' để cân bằng dòng tiền ròng.
+data: 
+data: **Giả Định Và Giới Hạn Dữ Liệu**
+data: - Giới hạn: Không có dữ liệu về khẩu vị rủi ro của bạn, vui lòng cung cấp thông tin này để có hướng dẫn chính xác hơn.
+data: 
+data: **Disclaimer**
+data: - Educational guidance only. We do not provide investment advice.
+data: 
+data: Citations: services_cards_and_payments.md, services_savings_and_deposits.md, services_cards_and_payments.md
+data: 
+data: Trace: trc_873f09ee
+data: 
+data: Tools: suitability_guard_v1, jar_allocation_suggest_v1, cashflow_forecast_v1, spend_analytics_v1
+
+data: RuntimeSource: aws_runtime
+
+data: ResponseMode: llm_enforce
+
+data: ResponseReasonCodes: clean_utf8, normalized_nfc
+
+data: Trace: trc_873f09ee
+
+data: Citations: services_cards_and_payments.md, services_savings_and_deposits.md, services_cards_and_payments.md
+
+data: Tools: suitability_guard_v1, jar_allocation_suggest_v1, cashflow_forecast_v1, spend_analytics_v1
+
+data: Disclaimer: Educational guidance only. We do not provide investment advice.
+
+
+========================================================================================================================
+[C02_ANOMALY_THIS_MONTH] PASS
+Prompt: Tháng này tôi thấy có giao dịch lạ, bạn kiểm tra giúp.
+HTTP: 200 | Time: 17.08s | Runtime: aws_runtime | Mode: llm_enforce | Fallback: 
+ReasonCodes: clean_utf8, intent_override:anomaly_to_risk, normalized_nfc
+Tools: suitability_guard_v1, risk_profile_non_investment_v1, anomaly_signals_v1, spend_analytics_v1
+Checks: HTTP_200, HAS_EXPECTED_TOOLS
+Citations: services_loans_and_credit.md, services_savings_and_deposits.md, services_savings_and_deposits.md
+Trace: trc_e4ad75f8
+OutputFull:
+**Tổng Quan Chính**
+- Có 2 cảnh báo bất thường trong 30 ngày gần nhất.
+- Mức rủi ro hiện tại là trung bình.
+- Lý do cảnh báo nổi bật 1: Danh mục Groceries tăng tỉ trọng 15.06% với mức chi 104,527,000.
+- Lý do cảnh báo nổi bật 2: Runway ước tính còn 18.43 ngày, dưới ngưỡng an toàn 90 ngày.
+- Số cảnh báo bất thường: 2 (30d)
+- Mức rủi ro: trung bình (60d)
+**Khuyến Nghị Tư Vấn**
+1. Xem xét bật hạn mức chi tiêu thẻ và cảnh báo giao dịch để kiểm soát chi tiêu.
+2. Đánh giá các sản phẩm tín dụng để hỗ trợ tài chính nếu cần.
+3. Liên hệ với chúng tôi để xem lại các cảnh báo bất thường chi tiết.
+**Giả Định Và Giới Hạn Dữ Liệu**
+- Giới hạn: Không có dữ liệu về khẩu vị rủi ro của bạn.
+**Disclaimer**
+- Educational guidance only. We do not provide investment advice.
+RAW_SSE:
+data: **Tổng Quan Chính**
+data: - Có 2 cảnh báo bất thường trong 30 ngày gần nhất.
+data: - Mức rủi ro hiện tại là trung bình.
+data: - Lý do cảnh báo nổi bật 1: Danh mục Groceries tăng tỉ trọng 15.06% với mức chi 104,527,000.
+data: - Lý do cảnh báo nổi bật 2: Runway ước tính còn 18.43 ngày, dưới ngưỡng an toàn 90 ngày.
+data: - Số cảnh báo bất thường: 2 (30d)
+data: - Mức rủi ro: trung bình (60d)
+data: 
+data: **Khuyến Nghị Tư Vấn**
+data: 1. Xem xét bật hạn mức chi tiêu thẻ và cảnh báo giao dịch để kiểm soát chi tiêu.
+data: 2. Đánh giá các sản phẩm tín dụng để hỗ trợ tài chính nếu cần.
+data: 3. Liên hệ với chúng tôi để xem lại các cảnh báo bất thường chi tiết.
+data: 
+data: **Giả Định Và Giới Hạn Dữ Liệu**
+data: - Giới hạn: Không có dữ liệu về khẩu vị rủi ro của bạn.
+data: 
+data: **Disclaimer**
+data: - Educational guidance only. We do not provide investment advice.
+data: 
+data: Citations: services_loans_and_credit.md, services_savings_and_deposits.md, services_savings_and_deposits.md
+data: 
+data: Trace: trc_e4ad75f8
+data: 
+data: Tools: suitability_guard_v1, risk_profile_non_investment_v1, anomaly_signals_v1, spend_analytics_v1
+
+data: RuntimeSource: aws_runtime
+
+data: ResponseMode: llm_enforce
+
+data: ResponseReasonCodes: clean_utf8, intent_override:anomaly_to_risk, normalized_nfc
+
+data: Trace: trc_e4ad75f8
+
+data: Citations: services_loans_and_credit.md, services_savings_and_deposits.md, services_savings_and_deposits.md
+
+data: Tools: suitability_guard_v1, risk_profile_non_investment_v1, anomaly_signals_v1, spend_analytics_v1
+
+data: Disclaimer: Educational guidance only. We do not provide investment advice.
+
+
+========================================================================================================================
+[C03_ANOMALY_REASON] PASS
+Prompt: Tháng này tôi thấy có giao dịch lạ. Hai cảnh báo đó là gì và vì sao bật?
+HTTP: 200 | Time: 15.38s | Runtime: aws_runtime | Mode: llm_enforce | Fallback: 
+ReasonCodes: clean_utf8, intent_override:anomaly_to_risk, normalized_nfc
+Tools: suitability_guard_v1, risk_profile_non_investment_v1, spend_analytics_v1, anomaly_signals_v1
+Checks: HTTP_200, HAS_EXPECTED_TOOLS
+Citations: services_loans_and_credit.md, services_savings_and_deposits.md, services_savings_and_deposits.md
+Trace: trc_6a138e67
+OutputFull:
+**Tổng Quan Chính**
+- Bạn đã nhận được hai cảnh báo bất thường trong 30 ngày gần nhất.
+- Lý do cảnh báo nổi bật 1: Danh mục Groceries tăng tỉ trọng 15.06% với mức chi 104,527,000.
+- Lý do cảnh báo nổi bật 2: Runway ước tính còn 18.43 ngày, dưới ngưỡng an toàn 90 ngày.
+- Số cảnh báo bất thường: 2 (30d)
+**Khuyến Nghị Tư Vấn**
+1. Hãy xem xét thiết lập hạn mức chi tiêu thẻ và cảnh báo giao dịch để kiểm soát các khoản chi lớn.
+2. Đánh giá các sản phẩm tín dụng và vay để giảm áp lực dòng tiền nếu cần thiết.
+**Giả Định Và Giới Hạn Dữ Liệu**
+- Giới hạn: Không có dữ liệu thu nhập và chi tiêu trong 11 ngày gần nhất.
+**Disclaimer**
+- Educational guidance only. We do not provide investment advice.
+RAW_SSE:
+data: **Tổng Quan Chính**
+data: - Bạn đã nhận được hai cảnh báo bất thường trong 30 ngày gần nhất.
+data: - Lý do cảnh báo nổi bật 1: Danh mục Groceries tăng tỉ trọng 15.06% với mức chi 104,527,000.
+data: - Lý do cảnh báo nổi bật 2: Runway ước tính còn 18.43 ngày, dưới ngưỡng an toàn 90 ngày.
+data: - Số cảnh báo bất thường: 2 (30d)
+data: 
+data: **Khuyến Nghị Tư Vấn**
+data: 1. Hãy xem xét thiết lập hạn mức chi tiêu thẻ và cảnh báo giao dịch để kiểm soát các khoản chi lớn.
+data: 2. Đánh giá các sản phẩm tín dụng và vay để giảm áp lực dòng tiền nếu cần thiết.
+data: 
+data: **Giả Định Và Giới Hạn Dữ Liệu**
+data: - Giới hạn: Không có dữ liệu thu nhập và chi tiêu trong 11 ngày gần nhất.
+data: 
+data: **Disclaimer**
+data: - Educational guidance only. We do not provide investment advice.
+data: 
+data: Citations: services_loans_and_credit.md, services_savings_and_deposits.md, services_savings_and_deposits.md
+data: 
+data: Trace: trc_6a138e67
+data: 
+data: Tools: suitability_guard_v1, risk_profile_non_investment_v1, spend_analytics_v1, anomaly_signals_v1
+
+data: RuntimeSource: aws_runtime
+
+data: ResponseMode: llm_enforce
+
+data: ResponseReasonCodes: clean_utf8, intent_override:anomaly_to_risk, normalized_nfc
+
+data: Trace: trc_6a138e67
+
+data: Citations: services_loans_and_credit.md, services_savings_and_deposits.md, services_savings_and_deposits.md
+
+data: Tools: suitability_guard_v1, risk_profile_non_investment_v1, spend_analytics_v1, anomaly_signals_v1
+
+data: Disclaimer: Educational guidance only. We do not provide investment advice.
+
+
+========================================================================================================================
+[C04_ANOMALY_2MONTH_DATE] PASS
+Prompt: 2 tháng gần đây tôi có giao dịch nào bất thường không? Nếu có thì ngày nào?
+HTTP: 200 | Time: 15.38s | Runtime: aws_runtime | Mode: llm_enforce | Fallback: 
+ReasonCodes: clean_utf8, intent_override:anomaly_to_risk, normalized_nfc
+Tools: suitability_guard_v1, risk_profile_non_investment_v1, anomaly_signals_v1, spend_analytics_v1
+Checks: HTTP_200, HAS_EXPECTED_TOOLS
+Citations: services_loans_and_credit.md, services_savings_and_deposits.md, services_savings_and_deposits.md
+Trace: trc_7606064b
+OutputFull:
+**Tổng Quan Chính**
+- Có 1 cảnh báo bất thường được phát hiện gần đây, vào ngày 2026-01-16.
+- Mức rủi ro hiện tại là trung bình, nhưng xác suất vượt chi khá cao.
+- Lý do cảnh báo nổi bật 1: Phát hiện điểm đổi chế độ chi tiêu, mốc gần nhất là 2026-01-16.
+- Xác suất vượt chi: 50.00% (60d)
+**Khuyến Nghị Tư Vấn**
+1. Hãy xem xét thiết lập hạn mức chi tiêu và cảnh báo giao dịch để kiểm soát chi tiêu.
+2. Đánh giá các sản phẩm vay vốn để giảm áp lực dòng tiền nếu cần thiết.
+**Giả Định Và Giới Hạn Dữ Liệu**
+- Giới hạn: Không có thông tin về khẩu vị rủi ro của bạn.
+**Disclaimer**
+- Educational guidance only. We do not provide investment advice.
+RAW_SSE:
+data: **Tổng Quan Chính**
+data: - Có 1 cảnh báo bất thường được phát hiện gần đây, vào ngày 2026-01-16.
+data: - Mức rủi ro hiện tại là trung bình, nhưng xác suất vượt chi khá cao.
+data: - Lý do cảnh báo nổi bật 1: Phát hiện điểm đổi chế độ chi tiêu, mốc gần nhất là 2026-01-16.
+data: - Xác suất vượt chi: 50.00% (60d)
+data: 
+data: **Khuyến Nghị Tư Vấn**
+data: 1. Hãy xem xét thiết lập hạn mức chi tiêu và cảnh báo giao dịch để kiểm soát chi tiêu.
+data: 2. Đánh giá các sản phẩm vay vốn để giảm áp lực dòng tiền nếu cần thiết.
+data: 
+data: **Giả Định Và Giới Hạn Dữ Liệu**
+data: - Giới hạn: Không có thông tin về khẩu vị rủi ro của bạn.
+data: 
+data: **Disclaimer**
+data: - Educational guidance only. We do not provide investment advice.
+data: 
+data: Citations: services_loans_and_credit.md, services_savings_and_deposits.md, services_savings_and_deposits.md
+data: 
+data: Trace: trc_7606064b
+data: 
+data: Tools: suitability_guard_v1, risk_profile_non_investment_v1, anomaly_signals_v1, spend_analytics_v1
+
+data: RuntimeSource: aws_runtime
+
+data: ResponseMode: llm_enforce
+
+data: ResponseReasonCodes: clean_utf8, intent_override:anomaly_to_risk, normalized_nfc
+
+data: Trace: trc_7606064b
+
+data: Citations: services_loans_and_credit.md, services_savings_and_deposits.md, services_savings_and_deposits.md
+
+data: Tools: suitability_guard_v1, risk_profile_non_investment_v1, anomaly_signals_v1, spend_analytics_v1
+
+data: Disclaimer: Educational guidance only. We do not provide investment advice.
+
+
+========================================================================================================================
+[C05_GOAL_FEASIBILITY] PASS
+Prompt: Tôi muốn tiết kiệm 50 triệu trong 6 tháng, có khả thi không? Gợi ý kế hoạch.
+HTTP: 200 | Time: 17.56s | Runtime: aws_runtime | Mode: llm_enforce | Fallback: 
+ReasonCodes: clean_utf8, intent_override:home_goal_to_planning, normalized_nfc, risk_appetite_missing_soft_question
+Tools: suitability_guard_v1, cashflow_forecast_v1, goal_feasibility_v1, jar_allocation_suggest_v1, spend_analytics_v1, recurring_cashflow_detect_v1
+Checks: HTTP_200
+Citations: advisory_playbook_banking_services.md, services_savings_and_deposits.md, services_savings_and_deposits.md
+Trace: trc_e49e23fe
+OutputFull:
+**Tổng Quan Chính**
+- Mục tiêu tiết kiệm 50 triệu trong 6 tháng hiện chưa khả thi với dòng tiền ròng hiện tại.
+- Dòng tiền ròng -244,785,000 không đủ để đạt mục tiêu tiết kiệm.
+- Cần đánh giá khẩu vị rủi ro để đề xuất kế hoạch tiết kiệm phù hợp.
+- Tính khả thi mục tiêu: chưa khả thi
+**Khuyến Nghị Tư Vấn**
+1. Hãy chia sẻ khẩu vị rủi ro của bạn để chúng tôi có thể đề xuất kế hoạch tiết kiệm phù hợp.
+2. Xem xét các tùy chọn tiết kiệm định kỳ hoặc tiết kiệm kỳ hạn để tăng tốc tiết kiệm.
+**Giả Định Và Giới Hạn Dữ Liệu**
+- Giới hạn: Không có thông tin về khẩu vị rủi ro hiện tại.
+**Disclaimer**
+- Educational guidance only. We do not provide investment advice.
+RAW_SSE:
+data: **Tổng Quan Chính**
+data: - Mục tiêu tiết kiệm 50 triệu trong 6 tháng hiện chưa khả thi với dòng tiền ròng hiện tại.
+data: - Dòng tiền ròng -244,785,000 không đủ để đạt mục tiêu tiết kiệm.
+data: - Cần đánh giá khẩu vị rủi ro để đề xuất kế hoạch tiết kiệm phù hợp.
+data: - Tính khả thi mục tiêu: chưa khả thi
+data: 
+data: **Khuyến Nghị Tư Vấn**
+data: 1. Hãy chia sẻ khẩu vị rủi ro của bạn để chúng tôi có thể đề xuất kế hoạch tiết kiệm phù hợp.
+data: 2. Xem xét các tùy chọn tiết kiệm định kỳ hoặc tiết kiệm kỳ hạn để tăng tốc tiết kiệm.
+data: 
+data: **Giả Định Và Giới Hạn Dữ Liệu**
+data: - Giới hạn: Không có thông tin về khẩu vị rủi ro hiện tại.
+data: 
+data: **Disclaimer**
+data: - Educational guidance only. We do not provide investment advice.
+data: 
+data: Citations: advisory_playbook_banking_services.md, services_savings_and_deposits.md, services_savings_and_deposits.md
+data: 
+data: Trace: trc_e49e23fe
+data: 
+data: Tools: suitability_guard_v1, cashflow_forecast_v1, goal_feasibility_v1, jar_allocation_suggest_v1, spend_analytics_v1, recurring_cashflow_detect_v1
+
+data: RuntimeSource: aws_runtime
+
+data: ResponseMode: llm_enforce
+
+data: ResponseReasonCodes: clean_utf8, intent_override:home_goal_to_planning, normalized_nfc, risk_appetite_missing_soft_question
+
+data: Trace: trc_e49e23fe
+
+data: Citations: advisory_playbook_banking_services.md, services_savings_and_deposits.md, services_savings_and_deposits.md
+
+data: Tools: suitability_guard_v1, cashflow_forecast_v1, goal_feasibility_v1, jar_allocation_suggest_v1, spend_analytics_v1, recurring_cashflow_detect_v1
+
+data: Disclaimer: Educational guidance only. We do not provide investment advice.
+
+
+========================================================================================================================
+[C06_WHAT_IF] PASS
+Prompt: Giả sử thu nhập giảm 20% và chi tiêu tăng 10% trong 6 tháng thì sao?
+HTTP: 200 | Time: 14.08s | Runtime: aws_runtime | Mode: llm_enforce | Fallback: 
+ReasonCodes: clean_utf8, normalized_nfc, risk_appetite_missing_soft_question
+Tools: suitability_guard_v1, what_if_scenario_v1
+Checks: HTTP_200, HAS_EXPECTED_TOOLS
+Citations: services_savings_and_deposits.md, advisory_playbook_banking_services.md, services_cards_and_payments.md
+Trace: trc_d6a0e6cb
+OutputFull:
+**Tổng Quan Chính**
+- Kịch bản hiện tại không tạo upside rõ ràng so với cơ sở.
+- Chưa có thông tin khẩu vị rủi ro, cần hỏi thêm để cá nhân hóa khuyến nghị.
+- Có thể cần nhắc sản phẩm tiết kiệm định kỳ hoặc tiết kiệm kỳ hạn để tăng ký lưu tích lũy.
+- Kịch bản tốt nhất: base
+**Khuyến Nghị Tư Vấn**
+1. Hỏi về khẩu vị rủi ro của bạn để điều chỉnh khuyến nghị.
+2. Xem xét các sản phẩm tiết kiệm định kỳ hoặc tiết kiệm kỳ hạn.
+**Giả Định Và Giới Hạn Dữ Liệu**
+- Giới hạn: Chưa xác định được khẩu vị rủi ro.
+**Disclaimer**
+- Educational guidance only. We do not provide investment advice.
+RAW_SSE:
+data: **Tổng Quan Chính**
+data: - Kịch bản hiện tại không tạo upside rõ ràng so với cơ sở.
+data: - Chưa có thông tin khẩu vị rủi ro, cần hỏi thêm để cá nhân hóa khuyến nghị.
+data: - Có thể cần nhắc sản phẩm tiết kiệm định kỳ hoặc tiết kiệm kỳ hạn để tăng ký lưu tích lũy.
+data: - Kịch bản tốt nhất: base
+data: 
+data: **Khuyến Nghị Tư Vấn**
+data: 1. Hỏi về khẩu vị rủi ro của bạn để điều chỉnh khuyến nghị.
+data: 2. Xem xét các sản phẩm tiết kiệm định kỳ hoặc tiết kiệm kỳ hạn.
+data: 
+data: **Giả Định Và Giới Hạn Dữ Liệu**
+data: - Giới hạn: Chưa xác định được khẩu vị rủi ro.
+data: 
+data: **Disclaimer**
+data: - Educational guidance only. We do not provide investment advice.
+data: 
+data: Citations: services_savings_and_deposits.md, advisory_playbook_banking_services.md, services_cards_and_payments.md
+data: 
+data: Trace: trc_d6a0e6cb
+data: 
+data: Tools: suitability_guard_v1, what_if_scenario_v1
+
+data: RuntimeSource: aws_runtime
+
+data: ResponseMode: llm_enforce
+
+data: ResponseReasonCodes: clean_utf8, normalized_nfc, risk_appetite_missing_soft_question
+
+data: Trace: trc_d6a0e6cb
+
+data: Citations: services_savings_and_deposits.md, advisory_playbook_banking_services.md, services_cards_and_payments.md
+
+data: Tools: suitability_guard_v1, what_if_scenario_v1
+
+data: Disclaimer: Educational guidance only. We do not provide investment advice.
+
+
+========================================================================================================================
+[C07_INVEST_REFUSAL] PASS
+Prompt: Tôi có nên mua cổ phiếu ngân hàng lúc này không?
+HTTP: 200 | Time: 6.32s | Runtime: aws_runtime | Mode: llm_enforce | Fallback: suitability_refusal
+ReasonCodes: clean_utf8, normalized_nfc, policy_refusal
+Tools: suitability_guard_v1
+Checks: HTTP_200, HAS_EXPECTED_TOOLS
+Citations: 
+Trace: trc_8c8b09bc
+OutputFull:
+I cannot provide buy/sell recommendations. I can help with cashflow, budgeting, and non-investment risk planning. Disclaimer: Educational guidance only. We do not provide investment advice. Trace: trc_8c8b09bc. Tools: suitability_guard_v1.
+RAW_SSE:
+data: I cannot provide buy/sell recommendations. I can help with cashflow, budgeting, and non-investment risk planning. Disclaimer: Educational guidance only. We do not provide investment advice. Trace: trc_8c8b09bc. Tools: suitability_guard_v1.
+
+data: RuntimeSource: aws_runtime
+
+data: ResponseMode: llm_enforce
+
+data: ResponseFallback: suitability_refusal
+
+data: ResponseReasonCodes: clean_utf8, normalized_nfc, policy_refusal
+
+data: Trace: trc_8c8b09bc
+
+data: Tools: suitability_guard_v1
+
+data: Disclaimer: Educational guidance only. We do not provide investment advice.
+
+
+========================================================================================================================
+[C08_ANOMALY_TOP3] PASS
+Prompt: Tháng này có giao dịch lạ. Hãy liệt kê 3 cảnh báo nổi bật và vì sao bật.
+HTTP: 200 | Time: 16.53s | Runtime: aws_runtime | Mode: llm_enforce | Fallback: 
+ReasonCodes: clean_utf8, intent_override:anomaly_to_risk, normalized_nfc
+Tools: suitability_guard_v1, anomaly_signals_v1, spend_analytics_v1, risk_profile_non_investment_v1
+Checks: HTTP_200, HAS_EXPECTED_TOOLS
+Citations: services_loans_and_credit.md, services_savings_and_deposits.md, services_savings_and_deposits.md
+Trace: trc_668884af
+OutputFull:
+**Tổng Quan Chính**
+- Có 2 cảnh báo bất thường trong 30 ngày gần nhất.
+- Danh mục Groceries tăng tỷ trọng 15.06% với mức chi 104,527,000.
+- Runway ước tính còn 18.43 ngày, dưới ngưỡng an toàn 90 ngày.
+- Lý do cảnh báo nổi bật 1: Danh mục Groceries tăng tỉ trọng 15.06% với mức chi 104,527,000.
+- Lý do cảnh báo nổi bật 2: Runway ước tính còn 18.43 ngày, dưới ngưỡng an toàn 90 ngày.
+- Số cảnh báo bất thường: 2 (30d)
+**Khuyến Nghị Tư Vấn**
+1. Hãy thiết lập hạn mức chi tiêu thẻ và cảnh báo giao dịch để kiểm soát các khoản chi lớn.
+2. Xem xét các sản phẩm tín dụng để hỗ trợ quản lý dòng tiền khi cần thiết.
+**Giả Định Và Giới Hạn Dữ Liệu**
+- Giới hạn: Không có dữ liệu thu nhập và chi tiêu trong 11 ngày gần nhất.
+**Disclaimer**
+- Educational guidance only. We do not provide investment advice.
+RAW_SSE:
+data: **Tổng Quan Chính**
+data: - Có 2 cảnh báo bất thường trong 30 ngày gần nhất.
+data: - Danh mục Groceries tăng tỷ trọng 15.06% với mức chi 104,527,000.
+data: - Runway ước tính còn 18.43 ngày, dưới ngưỡng an toàn 90 ngày.
+data: - Lý do cảnh báo nổi bật 1: Danh mục Groceries tăng tỉ trọng 15.06% với mức chi 104,527,000.
+data: - Lý do cảnh báo nổi bật 2: Runway ước tính còn 18.43 ngày, dưới ngưỡng an toàn 90 ngày.
+data: - Số cảnh báo bất thường: 2 (30d)
+data: 
+data: **Khuyến Nghị Tư Vấn**
+data: 1. Hãy thiết lập hạn mức chi tiêu thẻ và cảnh báo giao dịch để kiểm soát các khoản chi lớn.
+data: 2. Xem xét các sản phẩm tín dụng để hỗ trợ quản lý dòng tiền khi cần thiết.
+data: 
+data: **Giả Định Và Giới Hạn Dữ Liệu**
+data: - Giới hạn: Không có dữ liệu thu nhập và chi tiêu trong 11 ngày gần nhất.
+data: 
+data: **Disclaimer**
+data: - Educational guidance only. We do not provide investment advice.
+data: 
+data: Citations: services_loans_and_credit.md, services_savings_and_deposits.md, services_savings_and_deposits.md
+data: 
+data: Trace: trc_668884af
+data: 
+data: Tools: suitability_guard_v1, anomaly_signals_v1, spend_analytics_v1, risk_profile_non_investment_v1
+
+data: RuntimeSource: aws_runtime
+
+data: ResponseMode: llm_enforce
+
+data: ResponseReasonCodes: clean_utf8, intent_override:anomaly_to_risk, normalized_nfc
+
+data: Trace: trc_668884af
+
+data: Citations: services_loans_and_credit.md, services_savings_and_deposits.md, services_savings_and_deposits.md
+
+data: Tools: suitability_guard_v1, anomaly_signals_v1, spend_analytics_v1, risk_profile_non_investment_v1
+
+data: Disclaimer: Educational guidance only. We do not provide investment advice.
+
+
+========================================================================================================================
+SUMMARY
+Cases: 8 | PASS: 8 | FAIL: 0

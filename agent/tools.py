@@ -711,6 +711,7 @@ def spend_analytics(user_token: str, user_id: str, range_days: str = "30d", trac
 def anomaly_signals(user_token: str, user_id: str, lookback_days: int = 90, trace_id: str | None = None) -> Dict[str, Any]:
     if _should_use_local_mocks():
         return {
+            "lookback_days": lookback_days,
             "flags": ["abnormal_spend"],
             "abnormal_spend": {"flag": True, "z_score": 2.8},
             "trace_id": "trc_mocked01",
@@ -787,6 +788,7 @@ def risk_profile_non_investment_tool(
 ) -> Dict[str, Any]:
     if _should_use_local_mocks():
         return {
+            "lookback_days": lookback_days,
             "risk_band": "moderate",
             "cashflow_volatility": 0.4,
             "emergency_runway_months": 4,
@@ -868,6 +870,7 @@ def recurring_cashflow_detect_tool(
 ) -> Dict[str, Any]:
     if _should_use_local_mocks():
         return {
+            "lookback_months": lookback_months,
             "recurring_income": [],
             "recurring_expense": [{"counterparty_norm": "LANDLORD", "average_amount": 9000000}],
             "fixed_cost_ratio": 0.42,

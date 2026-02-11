@@ -24,6 +24,13 @@ def _mask_value(key: str, value: str) -> str:
     return value
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _ensure_backend_base(value: str) -> str:
     backend = (value or "").strip()
     if not backend:
@@ -64,7 +71,14 @@ def _build_env_vars() -> dict[str, str]:
             "https://jars-gw-afejhtqoqd.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp",
         )
     )
-    backend_api_base = _ensure_backend_base(os.getenv("DEPLOY_BACKEND_API_BASE", ""))
+    backend_raw = os.getenv("DEPLOY_BACKEND_API_BASE", "")
+    skip_backend_base_check = _env_bool("DEPLOY_SKIP_BACKEND_API_BASE_CHECK", False)
+    if skip_backend_base_check:
+        backend_api_base = (backend_raw or "http://localhost:8010").strip().rstrip("/")
+        if not backend_api_base.startswith(("http://", "https://")):
+            raise ValueError("DEPLOY_BACKEND_API_BASE must start with http:// or https://")
+    else:
+        backend_api_base = _ensure_backend_base(backend_raw)
     model_id = os.getenv("DEPLOY_BEDROCK_MODEL_ID", "amazon.nova-pro-v1:0").strip()
     return {
         "AWS_REGION": os.getenv("DEPLOY_AWS_REGION", "us-east-1").strip() or "us-east-1",
@@ -93,7 +107,7 @@ def _build_env_vars() -> dict[str, str]:
         or "answer_plan_v2",
         "RESPONSE_POLICY_VERSION": os.getenv("DEPLOY_RESPONSE_POLICY_VERSION", "advice_policy_v1").strip()
         or "advice_policy_v1",
-        "RESPONSE_MAX_RETRIES": os.getenv("DEPLOY_RESPONSE_MAX_RETRIES", "2").strip() or "2",
+        "RESPONSE_MAX_RETRIES": os.getenv("DEPLOY_RESPONSE_MAX_RETRIES", "0").strip() or "0",
         "ENCODING_GATE_ENABLED": os.getenv("DEPLOY_ENCODING_GATE_ENABLED", "true").strip() or "true",
         "ENCODING_REPAIR_ENABLED": os.getenv("DEPLOY_ENCODING_REPAIR_ENABLED", "true").strip() or "true",
         "ENCODING_REPAIR_SCORE_MIN": os.getenv("DEPLOY_ENCODING_REPAIR_SCORE_MIN", "0.12").strip() or "0.12",

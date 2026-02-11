@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict
 
 from .contracts import EvidencePackV1, FactV1, LanguageCode
@@ -12,6 +13,24 @@ def _sanitize_timeframe(raw: Any, default: str) -> str:
         return default
     normalized = "".join(ch for ch in text if ch.isalnum() or ch in {"_", "-"})
     return normalized or default
+
+
+def _parse_int_from_value(raw: Any, default: int) -> int:
+    if raw is None:
+        return default
+    if isinstance(raw, bool):
+        return default
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, float):
+        return int(raw)
+    text = str(raw).strip()
+    if not text:
+        return default
+    match = re.search(r"\d+", text)
+    if not match:
+        return default
+    return int(match.group(0))
 
 
 def _scenario_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
@@ -54,6 +73,120 @@ def _add_fact(
 
 def _avg(values: list[float]) -> float:
     return sum(values) / len(values) if values else 0.0
+
+
+_ANOMALY_FLAG_PRIORITY = {
+    "change_point": 0,
+    "category_spike": 1,
+    "spend_outlier": 2,
+    "spend_drift": 3,
+    "abnormal_spend": 4,
+    "income_drop": 5,
+    "low_balance_risk": 6,
+}
+_ANOMALY_REASON_MAX = 5
+
+
+def _normalize_anomaly_flags(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    normalized: list[str] = []
+    for item in raw:
+        value = str(item or "").strip().lower()
+        if value and value not in normalized:
+            normalized.append(value)
+    return normalized
+
+
+def _sorted_anomaly_flags(flags: list[str]) -> list[str]:
+    return sorted(flags, key=lambda item: (_ANOMALY_FLAG_PRIORITY.get(item, 99), item))
+
+
+def _extract_anomaly_change_points(anomaly: Dict[str, Any]) -> list[str]:
+    external_engines = anomaly.get("external_engines")
+    ruptures = external_engines.get("ruptures_pelt") if isinstance(external_engines, dict) else None
+    change_points_raw = ruptures.get("change_points") if isinstance(ruptures, dict) else None
+    if not isinstance(change_points_raw, list):
+        change_points_raw = anomaly.get("change_points")
+    if not isinstance(change_points_raw, list):
+        change_points_raw = []
+
+    change_points: list[str] = []
+    for item in change_points_raw:
+        value = str(item or "").strip()
+        if value and value not in change_points:
+            change_points.append(value)
+    return change_points
+
+
+def _build_anomaly_flag_reason(flag: str, anomaly: Dict[str, Any]) -> str:
+    external_engines = anomaly.get("external_engines")
+    if not isinstance(external_engines, dict):
+        external_engines = {}
+
+    if flag == "change_point":
+        change_points = _extract_anomaly_change_points(anomaly)
+        if change_points:
+            return f"Phát hiện điểm đổi chế độ chi tiêu, mốc gần nhất là {change_points[-1]}."
+        return "Phát hiện dấu hiệu đổi chế độ chi tiêu theo chuỗi thời gian."
+
+    if flag == "category_spike":
+        category_spikes = anomaly.get("category_spikes")
+        if not isinstance(category_spikes, list):
+            category_spikes = []
+        top_spike = category_spikes[0] if category_spikes and isinstance(category_spikes[0], dict) else {}
+        category_name = str(top_spike.get("category_name") or "Unknown")
+        delta_share = safe_float(top_spike.get("delta_share"))
+        recent_amount = safe_float(top_spike.get("recent_amount"))
+        if category_name != "Unknown" or delta_share > 0:
+            return (
+                f"Danh mục {category_name} tăng tỉ trọng {fmt_pct(delta_share)} "
+                f"với mức chi {fmt_money(recent_amount)}."
+            )
+        return "Có danh mục chi tiêu tăng tỉ trọng bất thường so với nền."
+
+    if flag == "spend_outlier":
+        pyod = external_engines.get("pyod_ecod")
+        pyod = pyod if isinstance(pyod, dict) else {}
+        outlier_prob = safe_float(pyod.get("outlier_probability"))
+        if outlier_prob > 0:
+            return f"Mẫu chi tiêu gần nhất nằm trong nhóm ngoại lệ với xác suất {fmt_pct(outlier_prob)}."
+        return "Mẫu chi tiêu gần nhất được đánh dấu là ngoại lệ."
+
+    if flag == "spend_drift":
+        river = external_engines.get("river_adwin")
+        river = river if isinstance(river, dict) else {}
+        drift_points = river.get("drift_points")
+        drift_count = len(drift_points) if isinstance(drift_points, list) else 0
+        if drift_count > 0:
+            return f"Chuỗi chi tiêu xuất hiện dấu hiệu drift với {drift_count} mốc thay đổi."
+        return "Chuỗi chi tiêu xuất hiện dấu hiệu drift so với nền."
+
+    if flag == "abnormal_spend":
+        abnormal_spend = anomaly.get("abnormal_spend")
+        abnormal_spend = abnormal_spend if isinstance(abnormal_spend, dict) else {}
+        z_score = safe_float(abnormal_spend.get("z_score"))
+        if z_score > 0:
+            return f"Mức chi tiêu 7 ngày gần đây lệch mạnh so với trung vị nền (z={z_score:.2f})."
+        return "Mức chi tiêu gần đây lệch đáng kể so với nền lịch sử."
+
+    if flag == "income_drop":
+        income_drop = anomaly.get("income_drop")
+        income_drop = income_drop if isinstance(income_drop, dict) else {}
+        drop_pct = safe_float(income_drop.get("drop_pct"))
+        if drop_pct > 0:
+            return f"Thu nhập trung bình giảm {fmt_pct(drop_pct)} so với giai đoạn nền."
+        return "Thu nhập trung bình giảm đáng kể so với giai đoạn nền."
+
+    if flag == "low_balance_risk":
+        low_balance = anomaly.get("low_balance_risk")
+        low_balance = low_balance if isinstance(low_balance, dict) else {}
+        runway_days = safe_float(low_balance.get("runway_days_estimate"))
+        if runway_days > 0:
+            return f"Runway ước tính còn {runway_days:.2f} ngày, dưới ngưỡng an toàn 90 ngày."
+        return "Runway ước tính dưới ngưỡng an toàn 90 ngày."
+
+    return "Phát hiện tín hiệu bất thường cần theo dõi thêm để đánh giá rủi ro."
 
 
 def _extract_spend_facts(tool_outputs: Dict[str, Any], facts: list[FactV1]) -> None:
@@ -154,7 +287,8 @@ def _extract_risk_facts(tool_outputs: Dict[str, Any], facts: list[FactV1]) -> No
     runway = safe_float(risk.get("emergency_runway_months"))
     volatility = safe_float(risk.get("cashflow_volatility"))
     overspend = safe_float(risk.get("overspend_propensity"))
-    timeframe = "180d"
+    lookback_days = max(60, min(720, _parse_int_from_value(risk.get("lookback_days"), 180)))
+    timeframe = f"{lookback_days}d"
     _add_fact(
         facts,
         fact_id=f"risk.risk_band.{timeframe}",
@@ -204,63 +338,76 @@ def _extract_anomaly_facts(tool_outputs: Dict[str, Any], facts: list[FactV1]) ->
     anomaly = tool_outputs.get("anomaly_signals_v1")
     if not isinstance(anomaly, dict):
         return
-    flags = anomaly.get("flags")
-    if not isinstance(flags, list):
-        flags = []
+    flags = _normalize_anomaly_flags(anomaly.get("flags"))
+    prioritized_flags = _sorted_anomaly_flags(flags)
+    lookback_days = max(30, min(365, _parse_int_from_value(anomaly.get("lookback_days"), 90)))
+    timeframe = f"{lookback_days}d"
     _add_fact(
         facts,
-        fact_id="anomaly.flags_count.90d",
+        fact_id=f"anomaly.flags_count.{timeframe}",
         label="Số cảnh báo bất thường",
         value=len(flags),
         value_text=str(len(flags)),
-        timeframe="90d",
+        timeframe=timeframe,
         source_tool="anomaly_signals_v1",
         source_path="flags",
     )
-    if flags:
+    if prioritized_flags:
         _add_fact(
             facts,
-            fact_id="anomaly.top_flag.90d",
+            fact_id=f"anomaly.top_flag.{timeframe}",
             label="Cảnh báo chính",
-            value=str(flags[0]),
-            value_text=str(flags[0]),
-            timeframe="90d",
+            value=str(prioritized_flags[0]),
+            value_text=str(prioritized_flags[0]),
+            timeframe=timeframe,
             source_tool="anomaly_signals_v1",
             source_path="flags[0]",
         )
 
-    external_engines = anomaly.get("external_engines")
-    ruptures = external_engines.get("ruptures_pelt") if isinstance(external_engines, dict) else None
-    change_points_raw = ruptures.get("change_points") if isinstance(ruptures, dict) else None
-    if not isinstance(change_points_raw, list):
-        change_points_raw = anomaly.get("change_points")
-    if not isinstance(change_points_raw, list):
-        change_points_raw = []
+    highlight_flags = prioritized_flags[:_ANOMALY_REASON_MAX]
+    if highlight_flags:
+        _add_fact(
+            facts,
+            fact_id=f"anomaly.top_flags.{timeframe}",
+            label="Cảnh báo nổi bật",
+            value=highlight_flags,
+            value_text=", ".join(highlight_flags),
+            timeframe=timeframe,
+            source_tool="anomaly_signals_v1",
+            source_path="flags",
+        )
+    for index, flag in enumerate(highlight_flags, start=1):
+        _add_fact(
+            facts,
+            fact_id=f"anomaly.flag_reason.{index}.{timeframe}",
+            label=f"Lý do cảnh báo {index}",
+            value=flag,
+            value_text=_build_anomaly_flag_reason(flag, anomaly),
+            timeframe=timeframe,
+            source_tool="anomaly_signals_v1",
+            source_path=f"flags::{flag}",
+        )
 
-    change_points: list[str] = []
-    for item in change_points_raw:
-        value = str(item or "").strip()
-        if value and value not in change_points:
-            change_points.append(value)
+    change_points = _extract_anomaly_change_points(anomaly)
 
     if change_points:
         _add_fact(
             facts,
-            fact_id="anomaly.change_points.90d",
+            fact_id=f"anomaly.change_points.{timeframe}",
             label="Các mốc ngày biến động chi tiêu",
             value=change_points,
             value_text=", ".join(change_points),
-            timeframe="90d",
+            timeframe=timeframe,
             source_tool="anomaly_signals_v1",
             source_path="external_engines.ruptures_pelt.change_points",
         )
         _add_fact(
             facts,
-            fact_id="anomaly.latest_change_point.90d",
+            fact_id=f"anomaly.latest_change_point.{timeframe}",
             label="Ngày bất thường gần nhất",
             value=change_points[-1],
             value_text=change_points[-1],
-            timeframe="90d",
+            timeframe=timeframe,
             source_tool="anomaly_signals_v1",
             source_path="external_engines.ruptures_pelt.change_points[-1]",
         )
@@ -366,14 +513,16 @@ def _extract_recurring_facts(tool_outputs: Dict[str, Any], facts: list[FactV1]) 
     fixed_cost_ratio = safe_float(recurring.get("fixed_cost_ratio"))
     if fixed_cost_ratio <= 0:
         return
+    lookback_months = max(3, min(24, _parse_int_from_value(recurring.get("lookback_months"), 6)))
+    timeframe = f"{lookback_months}m"
     _add_fact(
         facts,
-        fact_id="recurring.fixed_cost_ratio.6m",
+        fact_id=f"recurring.fixed_cost_ratio.{timeframe}",
         label="Tỷ lệ chi phí cố định",
         value=fixed_cost_ratio,
         value_text=fmt_pct(fixed_cost_ratio),
         unit="pct",
-        timeframe="6m",
+        timeframe=timeframe,
         source_tool="recurring_cashflow_detect_v1",
         source_path="fixed_cost_ratio",
     )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 import re
 import time
 import unicodedata
@@ -349,31 +350,180 @@ def _describe_scenario_overrides(overrides: Dict[str, Any], vietnamese: bool) ->
     return ", ".join(parts)
 
 
-def _bucket_days(requested_days: int) -> int:
-    days = max(1, requested_days)
-    if days <= 45:
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _days_since_month_start(now_utc: datetime | None = None) -> int:
+    ref = now_utc or _now_utc()
+    month_start = ref.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    return max(1, (ref - month_start).days + 1)
+
+
+def _days_in_previous_month(now_utc: datetime | None = None) -> int:
+    ref = now_utc or _now_utc()
+    month_start = ref.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    prev_month_last_day = month_start - timedelta(days=1)
+    return max(1, int(prev_month_last_day.day))
+
+
+def _days_since_quarter_start(now_utc: datetime | None = None) -> int:
+    ref = now_utc or _now_utc()
+    quarter_start_month = ((ref.month - 1) // 3) * 3 + 1
+    quarter_start = ref.replace(
+        month=quarter_start_month,
+        day=1,
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    return max(1, (ref - quarter_start).days + 1)
+
+
+def _extract_requested_days(normalized_prompt: str) -> int:
+    if not normalized_prompt:
+        return 0
+
+    explicit_day_patterns = [
+        r"\b(\d{1,4})\s*(ngay|day|days)\b",
+        r"\b(\d{1,4})d\b",
+    ]
+    for pattern in explicit_day_patterns:
+        match = re.search(pattern, normalized_prompt)
+        if match:
+            return max(1, _safe_int(match.group(1), 0))
+
+    week_match = re.search(r"\b(\d{1,3})\s*(tuan|week|weeks|w)\b", normalized_prompt)
+    if week_match:
+        return max(1, _safe_int(week_match.group(1), 0) * 7)
+
+    month_match = re.search(r"\b(\d{1,3})\s*(thang|month|months)\b", normalized_prompt)
+    if month_match:
+        return max(1, _safe_int(month_match.group(1), 0) * 30)
+
+    year_match = re.search(r"\b(\d{1,2})\s*(nam|year|years)\b", normalized_prompt)
+    if year_match:
+        return max(1, _safe_int(year_match.group(1), 0) * 365)
+
+    quarter_match = re.search(r"\b(\d{1,2})\s*(quy|quarter|quarters)\b", normalized_prompt)
+    if quarter_match:
+        return max(1, _safe_int(quarter_match.group(1), 0) * 90)
+
+    if any(term in normalized_prompt for term in ["thang nay", "this month", "month to date", "mtd"]):
+        return _days_since_month_start()
+    if any(term in normalized_prompt for term in ["thang truoc", "last month", "previous month"]):
+        return _days_in_previous_month()
+    if any(term in normalized_prompt for term in ["quy nay", "this quarter"]):
+        return _days_since_quarter_start()
+    if any(term in normalized_prompt for term in ["gan day", "gan nhat", "recent", "lately"]):
         return 30
-    if days <= 75:
-        return 60
-    return 90
+
+    return 0
 
 
-def _resolve_summary_range(prompt: str, intent: str) -> str:
+def _extract_requested_months(normalized_prompt: str) -> int:
+    if not normalized_prompt:
+        return 0
+
+    month_match = re.search(r"\b(\d{1,3})\s*(thang|month|months)\b", normalized_prompt)
+    if month_match:
+        return max(1, _safe_int(month_match.group(1), 0))
+
+    year_match = re.search(r"\b(\d{1,2})\s*(nam|year|years)\b", normalized_prompt)
+    if year_match:
+        return max(1, _safe_int(year_match.group(1), 0) * 12)
+
+    quarter_match = re.search(r"\b(\d{1,2})\s*(quy|quarter|quarters)\b", normalized_prompt)
+    if quarter_match:
+        return max(1, _safe_int(quarter_match.group(1), 0) * 3)
+
+    days = _extract_requested_days(normalized_prompt)
+    if days > 0:
+        return max(1, (days + 29) // 30)
+
+    if any(term in normalized_prompt for term in ["thang nay", "this month", "thang truoc", "last month", "previous month"]):
+        return 1
+    if any(term in normalized_prompt for term in ["quy nay", "this quarter"]):
+        return 3
+    if any(term in normalized_prompt for term in ["gan day", "gan nhat", "recent", "lately"]):
+        return 1
+
+    return 0
+
+
+def _slot_range_days(slots: Dict[str, Any] | None) -> int:
+    if not isinstance(slots, dict):
+        return 0
+
+    for key in ["range_days", "summary_days", "lookback_days", "days"]:
+        parsed = _safe_int(slots.get(key), 0)
+        if parsed > 0:
+            return parsed
+
+    for key in ["range", "summary_range", "lookback_range"]:
+        value = slots.get(key)
+        if value is None:
+            continue
+        match = re.search(r"\d+", str(value))
+        if match:
+            parsed = _safe_int(match.group(0), 0)
+            if parsed > 0:
+                return parsed
+    return 0
+
+
+def _slot_lookback_months(slots: Dict[str, Any] | None) -> int:
+    if not isinstance(slots, dict):
+        return 0
+    for key in ["lookback_months", "months", "window_months"]:
+        parsed = _safe_int(slots.get(key), 0)
+        if parsed > 0:
+            return parsed
+    return 0
+
+
+def _resolve_summary_range(prompt: str, intent: str, slots: Dict[str, Any] | None = None) -> str:
     normalized = _normalize_text(prompt)
-    requested_days = 0
-
-    day_match = re.search(r"(\d+)\s*(ngay|day|days|d)\b", normalized)
-    if day_match:
-        requested_days = _safe_int(day_match.group(1), 0)
-    else:
-        month_match = re.search(r"(\d+)\s*(thang|month|months)\b", normalized)
-        if month_match:
-            requested_days = _safe_int(month_match.group(1), 0) * 30
-
+    requested_days = _extract_requested_days(normalized)
+    if requested_days <= 0:
+        requested_days = _slot_range_days(slots)
     if requested_days <= 0:
         requested_days = 90 if intent == "risk" else 30
+    requested_days = max(1, min(365, requested_days))
+    return f"{requested_days}d"
 
-    return f"{_bucket_days(requested_days)}d"
+
+def _resolve_lookback_days(
+    *,
+    prompt: str,
+    slots: Dict[str, Any] | None,
+    default_days: int,
+    min_days: int,
+    max_days: int,
+) -> int:
+    requested_days = _extract_requested_days(_normalize_text(prompt))
+    if requested_days <= 0:
+        requested_days = _slot_range_days(slots)
+    if requested_days <= 0:
+        requested_days = default_days
+    return max(min_days, min(max_days, requested_days))
+
+
+def _resolve_lookback_months(
+    *,
+    prompt: str,
+    slots: Dict[str, Any] | None,
+    default_months: int,
+    min_months: int,
+    max_months: int,
+) -> int:
+    requested_months = _extract_requested_months(_normalize_text(prompt))
+    if requested_months <= 0:
+        requested_months = _slot_lookback_months(slots)
+    if requested_months <= 0:
+        requested_months = default_months
+    return max(min_months, min(max_months, requested_months))
 
 
 def _build_kb_query(prompt: str, intent: str) -> str:
@@ -399,7 +549,7 @@ def _summary_range_days(summary: Dict[str, Any]) -> int:
     match = re.search(r"\d+", raw)
     if not match:
         return 30
-    return _bucket_days(_safe_int(match.group(0), 30))
+    return max(1, min(365, _safe_int(match.group(0), 30)))
 
 
 _INVEST_ASSET_TERMS = [
@@ -1346,7 +1496,11 @@ def intent_router(state: AgentState) -> AgentState:
     if risk_appetite == "unknown" and semantic_decision.final_intent in {"planning", "scenario", "invest"}:
         semantic_decision.reason_codes = [*semantic_decision.reason_codes, "risk_appetite_missing_soft_question"]
 
-    if override_reason == "intent_override:service_priority_to_planning" and semantic_decision.clarify_needed:
+    bypass_low_gap_overrides = {
+        "intent_override:service_priority_to_planning",
+        "intent_override:anomaly_to_risk",
+    }
+    if override_reason in bypass_low_gap_overrides and semantic_decision.clarify_needed:
         clarify_reason_codes = {
             code
             for code in semantic_decision.reason_codes
@@ -1476,8 +1630,6 @@ def retrieve_kb(state: AgentState) -> AgentState:
     query = _build_kb_query(state.get("prompt", ""), state.get("intent", ""))
     intent = state.get("intent", "")
     kb_filters = {"intent": str(intent or "").strip().lower()}
-    if str(intent or "").strip().lower() == "invest":
-        kb_filters["doc_type"] = "policy"
     state["kb"] = kb_retrieve(
         query,
         kb_filters,
@@ -1495,7 +1647,11 @@ def _execute_tool_safe(tool_name: str, state: AgentState, extraction_slots: Dict
             # Skip - executed in dedicated suitability node
             return tool_name, {"skipped": True}
         if tool_name == "spend_analytics_v1":
-            range_days = _resolve_summary_range(state.get("prompt", ""), state.get("intent", "summary"))
+            range_days = _resolve_summary_range(
+                state.get("prompt", ""),
+                state.get("intent", "summary"),
+                extraction_slots,
+            )
             result = spend_analytics(
                 state["user_token"],
                 user_id=state["user_id"],
@@ -1516,30 +1672,49 @@ def _execute_tool_safe(tool_name: str, state: AgentState, extraction_slots: Dict
             return tool_name, result
 
         if tool_name == "anomaly_signals_v1":
-            lookback_days = _safe_int(extraction_slots.get("lookback_days"), 90)
+            lookback_days = _resolve_lookback_days(
+                prompt=state.get("prompt", ""),
+                slots=extraction_slots,
+                default_days=90,
+                min_days=30,
+                max_days=365,
+            )
             result = anomaly_signals(
                 state["user_token"],
                 user_id=state["user_id"],
-                lookback_days=max(30, min(365, lookback_days or 90)),
+                lookback_days=lookback_days,
                 trace_id=state["trace_id"],
             )
             return tool_name, result
 
         if tool_name == "risk_profile_non_investment_v1":
-            lookback_days = _safe_int(extraction_slots.get("lookback_days"), 180)
+            lookback_days = _resolve_lookback_days(
+                prompt=state.get("prompt", ""),
+                slots=extraction_slots,
+                default_days=180,
+                min_days=60,
+                max_days=720,
+            )
             result = risk_profile_non_investment_tool(
                 state["user_token"],
                 user_id=state["user_id"],
-                lookback_days=max(60, min(720, lookback_days or 180)),
+                lookback_days=lookback_days,
                 trace_id=state["trace_id"],
             )
             return tool_name, result
 
         if tool_name == "recurring_cashflow_detect_v1":
+            lookback_months = _resolve_lookback_months(
+                prompt=state.get("prompt", ""),
+                slots=extraction_slots,
+                default_months=6,
+                min_months=3,
+                max_months=24,
+            )
             result = recurring_cashflow_detect_tool(
                 state["user_token"],
                 user_id=state["user_id"],
-                lookback_months=max(3, min(24, _safe_int(extraction_slots.get("lookback_months"), 6) or 6)),
+                lookback_months=lookback_months,
                 min_occurrence_months=max(
                     2,
                     min(12, _safe_int(extraction_slots.get("min_occurrence_months"), 3) or 3),

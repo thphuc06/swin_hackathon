@@ -58,7 +58,7 @@ def build_insights_from_facts(
     net_fact = _find_first(facts, "spend.net_cashflow.")
     runway_fact = _find_first(facts, "risk.runway_months.")
     anomaly_count_fact = _find_first(facts, "anomaly.flags_count.")
-    anomaly_latest_date_fact = _find_exact(facts, "anomaly.latest_change_point.90d")
+    anomaly_latest_date_fact = _find_first(facts, "anomaly.latest_change_point.")
     volatility_fact = _find_first(facts, "risk.cashflow_volatility.")
     overspend_fact = _find_first(facts, "risk.overspend_propensity.")
     goal_gap_fact = _find_first(facts, "goal.gap_amount")
@@ -293,7 +293,7 @@ def build_insights_from_facts(
             insight_id="insight.service_savings_option",
             kind="service",
             severity="medium",
-            message_seed="Co the can nhac goi tiet kiem dinh ky hoac tiet kiem ky han de tang ky luat tich luy.",
+            message_seed="Co the can nhac san pham tiet kiem dinh ky hoac tiet kiem ky han de tang ky luat tich luy.",
             supporting_fact_ids=support,
         )
 
@@ -309,7 +309,7 @@ def build_insights_from_facts(
             insight_id="insight.service_loan_support",
             kind="service",
             severity="medium",
-            message_seed="Nen danh gia goi vay tai co cau no hoac khoan vay muc tieu de giam ap luc dong tien.",
+            message_seed="Nen danh gia san pham vay tai co cau no hoac khoan vay muc tieu de giam ap luc dong tien.",
             supporting_fact_ids=support,
         )
 
@@ -335,7 +335,7 @@ def build_insights_from_facts(
             insight_id="insight.education_only",
             kind="compliance",
             severity="high",
-            message_seed="Ná»™i dung tÆ° váº¥n giá»›i háº¡n trong giÃ¡o dá»¥c tÃ i chÃ­nh, khÃ´ng hÆ°á»›ng dáº«n giao dá»‹ch.",
+            message_seed="Noi dung tu van gioi han trong giao duc tai chinh, khong huong dan giao dich.",
             supporting_fact_ids=[],
         )
 

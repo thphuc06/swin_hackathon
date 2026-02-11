@@ -68,6 +68,15 @@ def _repair_sse_data_line(line: str) -> tuple[str, bool, str]:
     return f"data:{repaired_payload}", True, strategy
 
 
+def _format_sse_data_event(payload: str) -> str:
+    text = str(payload or "")
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    lines = normalized.split("\n")
+    if not lines:
+        lines = [""]
+    return "".join(f"data: {line}\n" for line in lines) + "\n"
+
+
 def _stream_local(prompt: str) -> Generator[str, None, None]:
     yield f"data: Simulated advisory for: {prompt}\n\n"
     yield "data: Disclaimer: Educational guidance only.\n\n"
@@ -133,7 +142,7 @@ def _invoke_agentcore(
                     raw_reason_codes = response_meta.get("reason_codes")
                     if isinstance(raw_reason_codes, list):
                         reason_codes = ", ".join([str(item).strip() for item in raw_reason_codes if str(item).strip()])
-                yield f"data: {result}\n\n"
+                yield _format_sse_data_event(result)
                 yield "data: RuntimeSource: aws_runtime\n\n"
                 if mode:
                     yield f"data: ResponseMode: {mode}\n\n"
@@ -191,7 +200,7 @@ def _invoke_agentcore(
         )
         response.raise_for_status()
         payload = response.json()
-        yield f"data: {payload.get('result', '')}\n\n"
+        yield _format_sse_data_event(str(payload.get("result", "")))
         yield "data: RuntimeSource: local_agent\n\n"
         response_meta = payload.get("response_meta", {})
         mode = ""

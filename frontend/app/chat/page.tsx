@@ -89,10 +89,29 @@ export default function ChatPage() {
     let buffer = "";
     let current = "";
     const handleSsePart = (part: string) => {
-      if (!part.startsWith("data:")) {
+      const eventLines = part.split(/\r?\n/);
+      const eventDataLines: string[] = [];
+      for (const rawLine of eventLines) {
+        if (rawLine.startsWith("data:")) {
+          eventDataLines.push(rawLine.replace(/^data:\s?/, ""));
+          continue;
+        }
+        if (
+          !rawLine.trim() ||
+          rawLine.startsWith(":") ||
+          rawLine.startsWith("event:") ||
+          rawLine.startsWith("id:") ||
+          rawLine.startsWith("retry:")
+        ) {
+          continue;
+        }
+        // Tolerate legacy payload fragments that do not repeat "data:" per line.
+        eventDataLines.push(rawLine);
+      }
+      if (eventDataLines.length === 0) {
         return;
       }
-      const data = part.replace(/^data:\s?/, "");
+      const data = eventDataLines.join("\n");
       const bodyLines: string[] = [];
       for (const rawLine of data.split(/\r?\n/)) {
         const line = rawLine.trim();
