@@ -227,6 +227,7 @@ def recurring_cashflow_detect(
         "as_of": iso_utc(as_of_dt),
     }
     payload = {
+        "lookback_months": lookback,
         "window_start": iso_utc(start_dt),
         "window_end": iso_utc(as_of_dt),
         "recurring_income": recurring_income,

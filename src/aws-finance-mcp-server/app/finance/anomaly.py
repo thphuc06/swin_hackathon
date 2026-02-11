@@ -163,6 +163,7 @@ def anomaly_signals(
         "as_of": iso_utc(as_of_dt),
     }
     payload = {
+        "lookback_days": lookback,
         "abnormal_spend": {
             "flag": abnormal_spend_flag,
             "z_score": round(z_score, 4),

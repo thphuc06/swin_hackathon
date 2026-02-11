@@ -105,7 +105,12 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
         "type": "object",
         "properties": {
             "user_id": {"type": "string"},
-            "range": {"type": "string", "enum": ["30d", "60d", "90d"], "default": "30d"},
+            "range": {
+                "type": "string",
+                "pattern": r"^\d{1,3}d$",
+                "default": "30d",
+                "description": "Rolling window in days, for example 30d, 45d, 90d.",
+            },
             "as_of": {"type": "string"},
             "trace_id": {"type": "string"},
         },

@@ -121,6 +121,7 @@ def risk_profile_non_investment(
         "as_of": iso_utc(as_of_dt),
     }
     payload = {
+        "lookback_days": lookback,
         "cashflow_volatility": round(volatility_ratio, 4),
         "emergency_runway_months": round(runway_months, 2) if runway_months != 999.0 else 999,
         "overspend_propensity": round(overspend_propensity, 4),

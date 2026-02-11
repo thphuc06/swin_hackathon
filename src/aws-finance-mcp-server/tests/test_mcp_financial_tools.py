@@ -38,7 +38,24 @@ class McpFinancialToolsTests(unittest.TestCase):
         }:
             self.assertIn(tool_name, names)
 
-    @patch("app.mcp.recurring_cashflow_detect")
+    @patch.object(mcp_route, "spend_analytics")
+    def test_tools_call_spend_allows_dynamic_day_window(self, mock_tool) -> None:
+        mock_tool.return_value = {"trace_id": "trc_spend", "range": "45d"}
+        payload = {
+            "jsonrpc": "2.0",
+            "id": "1b",
+            "method": "tools/call",
+            "params": {
+                "name": "spend_analytics_v1",
+                "arguments": {"user_id": "demo-user", "range": "45d"},
+            },
+        }
+        body = mcp_route.mcp_jsonrpc(payload)
+        self.assertIn("result", body)
+        self.assertTrue(mock_tool.called)
+        self.assertEqual(mock_tool.call_args.kwargs.get("range_value"), "45d")
+
+    @patch.object(mcp_route, "recurring_cashflow_detect")
     def test_tools_call_recurring(self, mock_tool) -> None:
         mock_tool.return_value = {"trace_id": "trc_test", "fixed_cost_ratio": 0.3}
         payload = {
@@ -56,7 +73,7 @@ class McpFinancialToolsTests(unittest.TestCase):
         self.assertTrue(content)
         self.assertIn("trc_test", content[0].get("text", ""))
 
-    @patch("app.mcp.goal_feasibility")
+    @patch.object(mcp_route, "goal_feasibility")
     def test_tools_call_goal_feasibility(self, mock_tool) -> None:
         mock_tool.return_value = {"trace_id": "trc_goal", "feasible": True}
         payload = {
@@ -74,7 +91,7 @@ class McpFinancialToolsTests(unittest.TestCase):
         self.assertTrue(content)
         self.assertIn("trc_goal", content[0].get("text", ""))
 
-    @patch("app.mcp.what_if_scenario")
+    @patch.object(mcp_route, "what_if_scenario")
     def test_tools_call_what_if(self, mock_tool) -> None:
         mock_tool.return_value = {"trace_id": "trc_scenario", "scenario_comparison": []}
         payload = {
