@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
-from typing import Dict
+import re
+from typing import Any, Dict
 
 from .contracts import FactV1, InsightV1
 from .normalize import safe_float
@@ -20,6 +21,46 @@ def _find_exact(facts: list[FactV1], fact_id: str) -> FactV1 | None:
         if fact.fact_id == fact_id:
             return fact
     return None
+
+
+def _extract_service_matches_from_facts(facts: list[FactV1]) -> list[dict[str, Any]]:
+    rows: dict[int, dict[str, Any]] = {}
+    for fact in facts:
+        fact_id = str(getattr(fact, "fact_id", "") or "").strip()
+        match = re.match(
+            r"^service\.match\.(\d+)\.(id|family|title|score|disclosure_refs|policy_reason_codes|matched_signals)$",
+            fact_id,
+        )
+        if not match:
+            continue
+        rank = int(match.group(1))
+        key = match.group(2)
+        row = rows.setdefault(rank, {"rank": rank})
+        raw = getattr(fact, "value", None)
+        if key in {"id", "family", "title"}:
+            row[key] = str(raw or "").strip()
+        elif key == "score":
+            row[key] = safe_float(raw, 0.0)
+        elif key in {"disclosure_refs", "policy_reason_codes", "matched_signals"}:
+            if isinstance(raw, list):
+                row[key] = [str(item).strip() for item in raw if str(item).strip()]
+            else:
+                row[key] = []
+    return [rows[idx] for idx in sorted(rows) if rows[idx].get("id")]
+
+
+def _extract_service_signals_from_facts(facts: list[FactV1]) -> set[str]:
+    signals: set[str] = set()
+    for fact in facts:
+        fact_id = str(getattr(fact, "fact_id", "") or "").strip()
+        if not fact_id.startswith("service.signal.") or fact_id.endswith(".sources") or fact_id.endswith(".meta"):
+            continue
+        if fact_id == "service.signal.count":
+            continue
+        signal = fact_id.replace("service.signal.", "", 1).strip().lower()
+        if signal:
+            signals.add(signal)
+    return signals
 
 
 def _add_insight(
@@ -68,11 +109,14 @@ def build_insights_from_facts(
     jar_status_fact = _find_exact(facts, "jar.status")
     scenario_delta_fact = _find_first(facts, "scenario.best_variant.delta")
     scenario_best_variant_fact = _find_first(facts, "scenario.best_variant.name")
+    service_match_rows = _extract_service_matches_from_facts(facts)
+    service_match_meta_fact = _find_exact(facts, "service.match.meta")
     service_savings_fact = _find_exact(facts, "kb.service_category.savings_deposit")
     service_loan_fact = _find_exact(facts, "kb.service_category.loans_credit")
     service_cards_fact = _find_exact(facts, "kb.service_category.cards_payments")
     service_playbook_fact = _find_exact(facts, "kb.service_category.service_playbook")
     risk_appetite_fact = _find_exact(facts, "slot.risk_appetite")
+    service_signals = _extract_service_signals_from_facts(facts)
 
     net_value = safe_float(net_fact.value if net_fact else 0.0)
     runway_value = safe_float(runway_fact.value if runway_fact else 0.0)
@@ -85,9 +129,16 @@ def build_insights_from_facts(
     if risk_appetite not in {"conservative", "moderate", "aggressive"} and risk_appetite_fact is not None:
         risk_appetite = str(risk_appetite_fact.value or "").strip().lower()
     if risk_appetite not in {"conservative", "moderate", "aggressive"}:
+        if "risk_conservative" in service_signals:
+            risk_appetite = "conservative"
+        elif "risk_moderate" in service_signals:
+            risk_appetite = "moderate"
+        elif "risk_aggressive" in service_signals:
+            risk_appetite = "aggressive"
+    if risk_appetite not in {"conservative", "moderate", "aggressive"}:
         risk_appetite = "unknown"
 
-    if net_fact and net_value < 0 and runway_fact and 0 < runway_value < 3:
+    if "cashflow_negative" in service_signals and "runway_low" in service_signals and net_fact and runway_fact:
         _add_insight(
             insights,
             seen,
@@ -97,7 +148,7 @@ def build_insights_from_facts(
             message_seed="DÃ²ng tiá»n rÃ²ng Ã¢m vÃ  runway dá»± phÃ²ng tháº¥p.",
             supporting_fact_ids=[net_fact.fact_id, runway_fact.fact_id],
         )
-    elif net_fact and net_value < 0:
+    elif "cashflow_negative" in service_signals and net_fact:
         _add_insight(
             insights,
             seen,
@@ -107,7 +158,7 @@ def build_insights_from_facts(
             message_seed="DÃ²ng tiá»n rÃ²ng Ä‘ang Ã¢m.",
             supporting_fact_ids=[net_fact.fact_id],
         )
-    elif net_fact and net_value > 0:
+    elif "cashflow_positive" in service_signals and net_fact:
         _add_insight(
             insights,
             seen,
@@ -119,13 +170,13 @@ def build_insights_from_facts(
         )
 
     anomaly_support: list[str] = []
-    if anomaly_count_fact and anomaly_count >= 1:
+    if "anomaly_recent" in service_signals and anomaly_count_fact:
         anomaly_support.append(anomaly_count_fact.fact_id)
     if anomaly_latest_date_fact and str(anomaly_latest_date_fact.value_text).strip():
         anomaly_support.append(anomaly_latest_date_fact.fact_id)
-    if volatility_fact and abs(volatility_value) >= 0.35:
+    if "volatility_high" in service_signals and volatility_fact:
         anomaly_support.append(volatility_fact.fact_id)
-    if overspend_fact and abs(overspend_value) >= 0.30:
+    if "overspend_high" in service_signals and overspend_fact:
         anomaly_support.append(overspend_fact.fact_id)
     if anomaly_support:
         latest_date = str(anomaly_latest_date_fact.value_text).strip() if anomaly_latest_date_fact else ""
@@ -144,7 +195,7 @@ def build_insights_from_facts(
         )
 
     goal_status_value = str(goal_status_fact.value if goal_status_fact else "").strip().lower()
-    if goal_status_fact and goal_status_value.startswith("insufficient_"):
+    if "goal_input_missing" in service_signals or (goal_status_fact and goal_status_value.startswith("insufficient_")):
         _add_insight(
             insights,
             seen,
@@ -156,7 +207,7 @@ def build_insights_from_facts(
         )
 
     jar_status_value = str(jar_status_fact.value if jar_status_fact else "").strip().lower()
-    if jar_status_fact and jar_status_value.startswith("insufficient_"):
+    if "jar_data_missing" in service_signals or (jar_status_fact and jar_status_value.startswith("insufficient_")):
         _add_insight(
             insights,
             seen,
@@ -180,7 +231,7 @@ def build_insights_from_facts(
             message_seed="Má»¥c tiÃªu hiá»‡n táº¡i chÆ°a kháº£ thi vá»›i thÃ´ng sá»‘ hiá»‡n cÃ³.",
             supporting_fact_ids=support,
         )
-    elif goal_gap_fact and goal_gap_value > 0:
+    elif ("goal_gap_high" in service_signals and goal_gap_fact) or (goal_gap_fact and goal_gap_value > 0):
         _add_insight(
             insights,
             seen,
@@ -269,9 +320,44 @@ def build_insights_from_facts(
         )
 
     service_catalog_support: list[str] = []
-    for fact in [service_savings_fact, service_loan_fact, service_cards_fact, service_playbook_fact]:
-        if fact is not None:
-            service_catalog_support.append(fact.fact_id)
+    dynamic_family_matches: set[str] = set()
+    if service_match_rows:
+        for row in service_match_rows:
+            rank = int(row.get("rank") or 0)
+            service_id = str(row.get("id") or "").strip()
+            family = str(row.get("family") or "").strip().lower()
+            title = str(row.get("title") or service_id or family).strip()
+            if not service_id:
+                continue
+            service_fact_id = f"service.match.{max(1, rank)}.id"
+            service_catalog_support.append(service_fact_id)
+            dynamic_family_matches.add(family)
+            matched_signals = row.get("matched_signals") if isinstance(row.get("matched_signals"), list) else []
+            signal_hint = ""
+            if matched_signals:
+                signal_hint = f" (tin hieu: {', '.join(str(item) for item in matched_signals[:2])})"
+            _add_insight(
+                insights,
+                seen,
+                insight_id=f"insight.service_match.{service_id}",
+                kind="service",
+                severity="medium",
+                message_seed=f"Dich vu {title} phu hop voi ngu canh hien tai{signal_hint}.",
+                supporting_fact_ids=[service_fact_id],
+            )
+    else:
+        if service_match_meta_fact is not None:
+            service_catalog_support.append(service_match_meta_fact.fact_id)
+        for fact in [service_savings_fact, service_loan_fact, service_cards_fact, service_playbook_fact]:
+            if fact is not None:
+                service_catalog_support.append(fact.fact_id)
+        if service_savings_fact is not None:
+            dynamic_family_matches.add("savings_deposit")
+        if service_loan_fact is not None:
+            dynamic_family_matches.add("loans_credit")
+        if service_cards_fact is not None:
+            dynamic_family_matches.add("cards_payments")
+
     if service_catalog_support:
         _add_insight(
             insights,
@@ -283,8 +369,14 @@ def build_insights_from_facts(
             supporting_fact_ids=service_catalog_support,
         )
 
-    if service_savings_fact and (net_value > 0 or str(intent or "") in {"planning", "scenario"}):
-        support = [service_savings_fact.fact_id]
+    has_savings_service = "savings_deposit" in dynamic_family_matches
+    has_loan_service = "loans_credit" in dynamic_family_matches
+    has_cards_service = "cards_payments" in dynamic_family_matches
+
+    if has_savings_service and (
+        "cashflow_positive" in service_signals or net_value > 0 or str(intent or "") in {"planning", "scenario"}
+    ):
+        support = [item for item in service_catalog_support if item.startswith("service.match.") or item.endswith("savings_deposit")]
         if net_fact and net_value > 0:
             support.append(net_fact.fact_id)
         _add_insight(
@@ -297,8 +389,15 @@ def build_insights_from_facts(
             supporting_fact_ids=support,
         )
 
-    if service_loan_fact and (net_value < 0 or goal_gap_value > 0 or overspend_value >= 0.30):
-        support = [service_loan_fact.fact_id]
+    if has_loan_service and (
+        "cashflow_negative" in service_signals
+        or "goal_gap_high" in service_signals
+        or "overspend_high" in service_signals
+        or net_value < 0
+        or goal_gap_value > 0
+        or overspend_value >= 0.30
+    ):
+        support = [item for item in service_catalog_support if item.startswith("service.match.") or item.endswith("loans_credit")]
         if net_fact and net_value < 0:
             support.append(net_fact.fact_id)
         if goal_gap_fact and goal_gap_value > 0:
@@ -313,8 +412,14 @@ def build_insights_from_facts(
             supporting_fact_ids=support,
         )
 
-    if service_cards_fact and (anomaly_support or net_value < 0 or overspend_value >= 0.30):
-        support = [service_cards_fact.fact_id]
+    if has_cards_service and (
+        "anomaly_recent" in service_signals
+        or "overspend_high" in service_signals
+        or anomaly_support
+        or net_value < 0
+        or overspend_value >= 0.30
+    ):
+        support = [item for item in service_catalog_support if item.startswith("service.match.") or item.endswith("cards_payments")]
         support.extend(anomaly_support)
         if overspend_fact and overspend_value >= 0.30:
             support.append(overspend_fact.fact_id)

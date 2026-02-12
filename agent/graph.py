@@ -1302,6 +1302,42 @@ def _build_clarification_response(state: AgentState, vietnamese: bool) -> str:
     return "\n".join(lines)
 
 
+def _build_service_match_clarification_response(service_match_meta: Dict[str, Any], vietnamese: bool) -> str:
+    options = service_match_meta.get("clarification_options")
+    if not isinstance(options, list) or len(options) < 2:
+        return ""
+
+    first = options[0] if isinstance(options[0], dict) else {}
+    second = options[1] if isinstance(options[1], dict) else {}
+    first_title = str(first.get("title") or first.get("service_id") or "option 1").strip()
+    second_title = str(second.get("title") or second.get("service_id") or "option 2").strip()
+    first_family = str(first.get("family") or "").strip()
+    second_family = str(second.get("family") or "").strip()
+
+    if vietnamese:
+        first_label = f"{first_title} ({first_family})" if first_family else first_title
+        second_label = f"{second_title} ({second_family})" if second_family else second_title
+        return "\n".join(
+            [
+                "**Can Lam Ro De Chon Dung Dich Vu**",
+                "- Cau hoi: Ban muon uu tien huong nao de minh de xuat dung dich vu?",
+                f"- Lua chon: 1) {first_label} | 2) {second_label}",
+                "- Vui long tra loi bang so thu tu (vi du: 1).",
+            ]
+        )
+
+    first_label = f"{first_title} ({first_family})" if first_family else first_title
+    second_label = f"{second_title} ({second_family})" if second_family else second_title
+    return "\n".join(
+        [
+            "**Need Clarification To Select The Right Service**",
+            "- Question: Which direction should I prioritize for your next step?",
+            f"- Options: 1) {first_label} | 2) {second_label}",
+            "- Reply with the option number (for example: 1).",
+        ]
+    )
+
+
 def _build_encoding_fail_fast_response(vietnamese: bool) -> str:
     if vietnamese:
         return (
@@ -1338,6 +1374,31 @@ def _record_tool_error(state: AgentState, tool_name: str, exc: Exception) -> Non
     reason_codes.append(f"tool_error:{tool_name}")
     state["response_meta"] = {**existing_meta, "reason_codes": sorted(set(reason_codes))}
     logger.warning("tool_call_failed tool=%s trace=%s error=%s", tool_name, state.get("trace_id"), exc)
+
+
+def _extract_service_match_meta(evidence_pack: Any) -> Dict[str, Any]:
+    facts = getattr(evidence_pack, "facts", [])
+    if not isinstance(facts, list):
+        return {}
+    for fact in facts:
+        fact_id = str(getattr(fact, "fact_id", "") or "").strip()
+        if fact_id != "service.match.meta":
+            continue
+        raw = getattr(fact, "value", {})
+        if isinstance(raw, dict):
+            return {
+                "catalog_version": str(raw.get("catalog_version") or ""),
+                "mode": str(raw.get("mode") or ""),
+                "signals": raw.get("signals", []),
+                "selected": raw.get("selected", []),
+                "candidates": raw.get("candidates", []),
+                "embedding_candidates": raw.get("embedding_candidates", []),
+                "filtered_by_policy": raw.get("filtered_by_policy", []),
+                "clarification_triggered": bool(raw.get("clarification_triggered")),
+                "clarification_options": raw.get("clarification_options", []),
+                "margin": float(raw.get("margin") or 0.0),
+            }
+    return {}
 
 
 def encoding_gate(state: AgentState) -> AgentState:
@@ -1499,6 +1560,8 @@ def intent_router(state: AgentState) -> AgentState:
     bypass_low_gap_overrides = {
         "intent_override:service_priority_to_planning",
         "intent_override:anomaly_to_risk",
+        "intent_override:savings_deposit_to_planning",
+        "intent_override:purchase_goal_to_planning",
     }
     if override_reason in bypass_low_gap_overrides and semantic_decision.clarify_needed:
         clarify_reason_codes = {
@@ -1980,13 +2043,31 @@ def reasoning(state: AgentState) -> AgentState:
     evidence_pack, evidence_reasons = build_evidence_pack(
         intent=state.get("intent", "out_of_scope"),
         language=language,
+        user_prompt=state.get("prompt", ""),
         tool_outputs=state.get("tool_outputs", {}),
         kb=state.get("kb", {}),
         policy_flags=policy_flags,
         extraction_slots=extraction_slots,
     )
+    service_match_meta = _extract_service_match_meta(evidence_pack)
+    if service_match_meta:
+        response_meta["service_match_meta"] = service_match_meta
     state["evidence_pack"] = evidence_pack.model_dump()
     response_meta["reason_codes"].extend(evidence_reasons)
+    if bool(service_match_meta.get("clarification_triggered")):
+        clarify_body = _build_service_match_clarification_response(service_match_meta, vietnamese)
+        if clarify_body:
+            response_meta["reason_codes"].append("service_clarify_low_margin")
+            response_meta.update(
+                {
+                    "validation_passed": True,
+                    "fallback_used": "clarification_pending",
+                }
+            )
+            response_meta["reason_codes"] = sorted(set(str(item) for item in response_meta["reason_codes"] if str(item).strip()))
+            state["response_meta"] = response_meta
+            state["response"] = _finalize_response(clarify_body, citations, state["trace_id"], tool_chain)
+            return state
     advisory_context, advisory_reasons = build_advisory_context(
         evidence_pack=evidence_pack,
         policy_version=RESPONSE_POLICY_VERSION,

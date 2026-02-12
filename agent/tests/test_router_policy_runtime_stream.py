@@ -88,6 +88,18 @@ class RouterOverrideTests(unittest.TestCase):
         self.assertEqual(override_intent, "planning")
         self.assertEqual(reason, "intent_override:service_priority_to_planning")
 
+    def test_savings_deposit_prompt_overrides_to_planning(self) -> None:
+        prompt = "Dong tien 3 thang gan day cua toi duong deu, toi muon gui tiet kiem ky han 12 thang."
+        override_intent, reason = suggest_intent_override(prompt, _make_extraction("summary"))
+        self.assertEqual(override_intent, "planning")
+        self.assertEqual(reason, "intent_override:savings_deposit_to_planning")
+
+    def test_purchase_phone_goal_overrides_to_planning(self) -> None:
+        prompt = "Tôi muốn mua điện thoại 20 triệu trong 8 tháng, có kế hoạch nào phù hợp không?"
+        override_intent, reason = suggest_intent_override(prompt, _make_extraction("summary"))
+        self.assertEqual(override_intent, "planning")
+        self.assertEqual(reason, "intent_override:purchase_goal_to_planning")
+
 
 if __name__ == "__main__":
     unittest.main()

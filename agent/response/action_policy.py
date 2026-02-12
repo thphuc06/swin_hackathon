@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .contracts import ActionCandidateV1, AdvisoryContextV1, EvidencePackV1, InsightV1
+from .contracts import ActionCandidateV1, AdvisoryContextV1, EvidencePackV1, FactV1, InsightV1
 from .insights import build_insights_from_facts
 
 
@@ -18,6 +18,59 @@ def _service_priority_by_risk(risk_appetite: str) -> dict[str, int]:
     if risk_appetite == "aggressive":
         return {"savings": 26, "cards": 20, "loan": 15, "consult": 42}
     return {"savings": 22, "cards": 19, "loan": 18, "consult": 46}
+
+
+def _service_priority_for_family(family: str, priorities: dict[str, int]) -> int:
+    normalized = str(family or "").strip().lower()
+    if normalized == "savings_deposit":
+        return priorities["savings"]
+    if normalized == "cards_payments":
+        return priorities["cards"]
+    if normalized == "loans_credit":
+        return priorities["loan"]
+    return priorities["consult"]
+
+
+def _extract_service_matches_from_facts(facts: list[FactV1]) -> list[dict[str, Any]]:
+    rows: dict[int, dict[str, Any]] = {}
+    for fact in facts:
+        fact_id = str(getattr(fact, "fact_id", "") or "").strip()
+        if not fact_id.startswith("service.match.") or fact_id == "service.match.meta":
+            continue
+        parts = fact_id.split(".")
+        if len(parts) < 4:
+            continue
+        try:
+            rank = int(parts[2])
+        except ValueError:
+            continue
+        key = parts[3]
+        row = rows.setdefault(rank, {"rank": rank})
+        if key in {"id", "family", "title"}:
+            row[key] = str(getattr(fact, "value", "") or "").strip()
+        elif key == "score":
+            try:
+                row[key] = float(getattr(fact, "value", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                row[key] = 0.0
+        elif key in {"disclosure_refs", "policy_reason_codes", "matched_signals"}:
+            raw = getattr(fact, "value", [])
+            if isinstance(raw, list):
+                row[key] = [str(item).strip() for item in raw if str(item).strip()]
+            else:
+                row[key] = []
+    ordered = [rows[rank] for rank in sorted(rows)]
+    return [row for row in ordered if row.get("id")]
+
+
+def _extract_service_match_meta_fact(facts: list[FactV1]) -> dict[str, Any]:
+    for fact in facts:
+        if str(getattr(fact, "fact_id", "") or "").strip() != "service.match.meta":
+            continue
+        value = getattr(fact, "value", {})
+        if isinstance(value, dict):
+            return value
+    return {}
 
 
 def _add_action(
@@ -48,11 +101,15 @@ def build_action_candidates(
     *,
     intent: str,
     insights: list[InsightV1],
+    facts: list[FactV1] | None = None,
     policy_flags: dict[str, Any] | None = None,
 ) -> list[ActionCandidateV1]:
     candidates: list[ActionCandidateV1] = []
     seen: set[str] = set()
     insight_ids = _insight_ids(insights)
+    service_match_rows = _extract_service_matches_from_facts(facts or [])
+    service_match_meta = _extract_service_match_meta_fact(facts or [])
+    catalog_version = str(service_match_meta.get("catalog_version") or "").strip()
     risk_appetite = str((policy_flags or {}).get("risk_appetite") or "").strip().lower()
     if risk_appetite not in {"conservative", "moderate", "aggressive"}:
         risk_appetite = "unknown"
@@ -179,7 +236,34 @@ def build_action_candidates(
             supporting_insight_ids=["insight.risk_preference_unknown"],
         )
 
-    if "insight.service_loan_support" in insight_ids:
+    if service_match_rows:
+        for row in service_match_rows:
+            service_id = str(row.get("id") or "").strip()
+            family = str(row.get("family") or "catalog").strip().lower() or "catalog"
+            priority = min(90, _service_priority_for_family(family, service_priorities) + max(0, int(row.get("rank", 1)) - 1))
+            supporting = []
+            dynamic_insight_id = f"insight.service_match.{service_id}"
+            if dynamic_insight_id in insight_ids:
+                supporting.append(dynamic_insight_id)
+            _add_action(
+                candidates,
+                seen,
+                action_id=f"service_suggestion_{service_id}",
+                priority=priority,
+                action_type="service_suggestion",
+                params={
+                    "service_id": service_id,
+                    "service_family": family,
+                    "match_score": float(row.get("score") or 0.0),
+                    "matched_signals": row.get("matched_signals", []),
+                    "disclosure_refs": row.get("disclosure_refs", []),
+                    "policy_reason_codes": row.get("policy_reason_codes", []),
+                    "catalog_version": catalog_version,
+                    "risk_appetite": risk_appetite,
+                },
+                supporting_insight_ids=supporting,
+            )
+    elif "insight.service_loan_support" in insight_ids:
         _add_action(
             candidates,
             seen,
@@ -189,12 +273,14 @@ def build_action_candidates(
             params={
                 "service_family": "loans_credit",
                 "examples": ["loan_restructure", "installment_conversion"],
+                "policy_reason_codes": ["legacy_fallback"],
+                "catalog_version": catalog_version,
                 "risk_appetite": risk_appetite,
             },
             supporting_insight_ids=["insight.service_loan_support"],
         )
 
-    if "insight.service_spend_control" in insight_ids:
+    if not service_match_rows and "insight.service_spend_control" in insight_ids:
         _add_action(
             candidates,
             seen,
@@ -204,12 +290,14 @@ def build_action_candidates(
             params={
                 "service_family": "cards_payments",
                 "examples": ["card_spend_cap", "transaction_alert"],
+                "policy_reason_codes": ["legacy_fallback"],
+                "catalog_version": catalog_version,
                 "risk_appetite": risk_appetite,
             },
             supporting_insight_ids=["insight.service_spend_control"],
         )
 
-    if "insight.service_savings_option" in insight_ids:
+    if not service_match_rows and "insight.service_savings_option" in insight_ids:
         _add_action(
             candidates,
             seen,
@@ -219,19 +307,28 @@ def build_action_candidates(
             params={
                 "service_family": "savings_deposit",
                 "examples": ["recurring_savings", "term_deposit"],
+                "policy_reason_codes": ["legacy_fallback"],
+                "catalog_version": catalog_version,
                 "risk_appetite": risk_appetite,
             },
             supporting_insight_ids=["insight.service_savings_option"],
         )
 
-    if "insight.service_catalog_available" in insight_ids:
+    if "insight.service_catalog_available" in insight_ids and not service_match_rows:
         _add_action(
             candidates,
             seen,
             action_id="service_needs_consult",
             priority=service_priorities["consult"],
             action_type="service_suggestion",
-            params={"service_family": "catalog", "cadence_days": 7, "risk_appetite": risk_appetite},
+            params={
+                "service_id": "service_needs_consult",
+                "service_family": "catalog",
+                "cadence_days": 7,
+                "policy_reason_codes": ["no_service_above_threshold"],
+                "catalog_version": catalog_version,
+                "risk_appetite": risk_appetite,
+            },
             supporting_insight_ids=["insight.service_catalog_available"],
         )
 
@@ -294,6 +391,7 @@ def build_advisory_context(
     actions = build_action_candidates(
         intent=evidence_pack.intent,
         insights=insights,
+        facts=evidence_pack.facts,
         policy_flags=evidence_pack.policy_flags,
     )
 

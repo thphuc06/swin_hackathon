@@ -71,6 +71,34 @@ def _top2_score(extraction: IntentExtractionV1, intent_name: IntentName) -> floa
     return 0.0
 
 
+def _has_non_invest_purchase_goal(text: str, has_invest_terms: bool) -> bool:
+    if has_invest_terms:
+        return False
+    if not re.search(r"\b(mua|buy)\b\s+\S", text):
+        return False
+
+    goal_cues = [
+        "muc tieu",
+        "ke hoach",
+        "tiet kiem",
+        "tra gop",
+        "bao lau",
+        "kha thi",
+        "du tien",
+        "ngan sach",
+        "saving plan",
+        "goal",
+        "budget",
+        "installment",
+    ]
+    if _contains_any(text, goal_cues):
+        return True
+
+    has_time_horizon = bool(re.search(r"\b(trong|sau)\s+\d{1,3}\s*(ngay|tuan|thang|nam|days?|weeks?|months?|years?)\b", text))
+    has_budget_amount = bool(re.search(r"\b\d+(?:[.,]\d+)?\s*(k|nghin|ngan|trieu|ty|ti|m|million|billion)\b", text))
+    return has_time_horizon or has_budget_amount
+
+
 def suggest_intent_override(prompt: str, extraction: IntentExtractionV1) -> tuple[IntentName | None, str]:
     normalized = _normalize_prompt(prompt)
     domain_relevance = float(getattr(extraction, "domain_relevance", 1.0))
@@ -122,6 +150,16 @@ def suggest_intent_override(prompt: str, extraction: IntentExtractionV1) -> tupl
         "saving plan",
         "bao lau",
         "kha thi",
+    ]
+    savings_deposit_terms = [
+        "gui tiet kiem",
+        "mo so tiet kiem",
+        "lap so tiet kiem",
+        "tiet kiem ky han",
+        "goi tiet kiem",
+        "term deposit",
+        "fixed deposit",
+        "recurring savings",
     ]
     recurring_terms = [
         "chi co dinh",
@@ -176,8 +214,14 @@ def suggest_intent_override(prompt: str, extraction: IntentExtractionV1) -> tupl
     if _contains_any(normalized, anomaly_terms) and not has_invest_terms:
         return "risk", "intent_override:anomaly_to_risk"
 
+    if _contains_any(normalized, savings_deposit_terms) and not has_invest_terms:
+        return "planning", "intent_override:savings_deposit_to_planning"
+
     if _contains_any(normalized, planning_home_goal_terms):
         return "planning", "intent_override:home_goal_to_planning"
+
+    if _has_non_invest_purchase_goal(normalized, has_invest_terms):
+        return "planning", "intent_override:purchase_goal_to_planning"
 
     if _contains_any(normalized, recurring_terms):
         return "planning", "intent_override:recurring_to_planning"

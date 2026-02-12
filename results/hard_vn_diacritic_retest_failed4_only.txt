@@ -1,0 +1,105 @@
+RETEST REPORT - PREVIOUSLY FAILED 4 CASES
+Generated at: 2026-02-12 20:22:36
+Base URL: http://127.0.0.1:8010/chat/stream
+
+======================================================================================================================
+[HV01_SAVINGS_POSITIVE_VI] PASS
+Prompt: Dòng tiền 3 tháng gần đây của tôi dương đều, tôi muốn gửi tiết kiệm kỳ hạn 12 tháng.
+HTTP: 200 | Time: 25.29s | Runtime: aws_runtime | Mode: llm_enforce | Fallback: 
+ReasonCodes: clean_utf8, intent_override:savings_deposit_to_planning, no_service_above_threshold, normalized_nfc, risk_appetite_missing_soft_question, tool_status:goal_feasibility_v1:insufficient_input
+Tools: suitability_guard_v1, goal_feasibility_v1, jar_allocation_suggest_v1, recurring_cashflow_detect_v1, spend_analytics_v1, cashflow_forecast_v1
+ExpectedServiceFamilies: savings_deposit
+DetectedServiceFamilies: savings_deposit
+Checks: HTTP_200, HAS_EXPECTED_TOOLS, SERVICE_EXACT_MATCH, OUTPUT_NON_EMPTY
+Trace: trc_619218dd
+OutputHead:
+**Tổng Quan Chính**
+- Dòng tiền ròng -563,034,000 trong 90 ngày gần đây.
+- Thu nhập dự báo trung bình hàng tuần là 140,289,375.
+- Chi tiêu dự báo trung bình hàng tuần là 150,260,500.
+**Khuyến Nghị Tư Vấn**
+1. Hãy cung cấp mục tiêu tiết kiệm cụ thể để đánh giá khả thi.
+2. Xác định khẩu vị rủi ro của bạn để cá nhân hóa khuyến nghị.
+**Giả Định Và Giới Hạn Dữ Liệu**
+- Giới hạn: Thiếu dữ liệu mục tiêu để đánh giá khả thi.
+- Giới hạn: Chưa xác định khẩu vị rủi ro.
+**Disclaimer**
+- Educational guidance only. We do not provide investment advice.
+
+======================================================================================================================
+[HV02_SAVINGS_POSITIVE_MIX] PASS
+Prompt: Cashflow của tôi ổn định và dương, tôi cần phương án recurring savings để đạt mục tiêu.
+HTTP: 200 | Time: 20.09s | Runtime: aws_runtime | Mode: llm_enforce | Fallback: 
+ReasonCodes: clean_utf8, intent_override:savings_deposit_to_planning, no_service_above_threshold, normalized_nfc, risk_appetite_missing_soft_question, tool_status:goal_feasibility_v1:insufficient_input
+Tools: suitability_guard_v1, goal_feasibility_v1, cashflow_forecast_v1, jar_allocation_suggest_v1, spend_analytics_v1, recurring_cashflow_detect_v1
+ExpectedServiceFamilies: savings_deposit
+DetectedServiceFamilies: savings_deposit
+Checks: HTTP_200, HAS_EXPECTED_TOOLS, SERVICE_EXACT_MATCH, OUTPUT_NON_EMPTY
+Trace: trc_e40688f4
+OutputHead:
+**Tổng Quan Chính**
+- Dòng tiền ròng của bạn hiện đang âm -676,711,000, điều này cần được ưu tiên giải quyết.
+- Chưa có thông tin mục tiêu tài chính cụ thể, vui lòng cung cấp số tiền và thời hạn để đánh giá khả thi.
+- Khẩu vị rủi ro của bạn hiện chưa được xác định, điều này sẽ giúp cá nhân hóa khuyến nghị.
+- Trạng thái dữ liệu mục tiêu: insufficient_input
+- Trạng thái policy cho phép: allow
+**Khuyến Nghị Tư Vấn**
+1. Vui lòng cung cấp mục tiêu tài chính cụ thể để đánh giá khả thi.
+2. Hãy xác định khẩu vị rủi ro của bạn để cá nhân hóa khuyến nghị tiết kiệm.
+**Giả Định Và Giới Hạn Dữ Liệu**
+- Giới hạn: Dữ liệu mục tiêu tài chính hiện không đủ để đánh giá khả thi.
+**Disclaimer**
+
+======================================================================================================================
+[HV07_MIXED_CARD_PRIORITY] FAIL
+Prompt: Có giao dịch bất thường và vượt chi, ưu tiên của tôi là khóa rò rỉ chi tiêu trước.
+HTTP: 200 | Time: 17.64s | Runtime: aws_runtime | Mode: llm_enforce | Fallback: 
+ReasonCodes: clean_utf8, intent_override:anomaly_to_risk, normalized_nfc
+Tools: suitability_guard_v1, risk_profile_non_investment_v1, anomaly_signals_v1, spend_analytics_v1
+ExpectedServiceFamilies: cards_payments
+DetectedServiceFamilies: loans_credit
+Checks: HTTP_200, HAS_EXPECTED_TOOLS, SERVICE_EXACT_MISS, OUTPUT_NON_EMPTY
+Trace: trc_f5ae16ef
+OutputHead:
+**Tổng Quan Chính**
+- Có 1 cảnh báo bất thường (dấu hiệu giao dịch lạ) trong cửa sổ hiện tại.
+- Dòng tiền ròng -563,034,000, tích cực xem xét các dịch vụ hỗ trợ.
+- Phát hiện biến động chi tiêu bất thường gần nhất vào 2026-01-16.
+- Xác suất vượt chi 33.33%, cần kiểm soát chi tiêu.
+- Lý do cảnh báo nổi bật 1: Phát hiện điểm đổi chế độ chi tiêu, mốc gần nhất là 2026-01-16.
+**Khuyến Nghị Tư Vấn**
+1. Sử dụng dịch vụ kiểm soát thanh toán thẻ để hạn chế chi tiêu không kiểm soát.
+2. Xem xét dịch vụ hỗ trợ tín dụng để quản lý dòng tiền ròng âm.
+**Giả Định Và Giới Hạn Dữ Liệu**
+- n/a
+**Disclaimer**
+
+======================================================================================================================
+[HV08_MIXED_LOAN_PRIORITY] FAIL
+Prompt: Âm dòng tiền liên tục 3 tháng, tôi ưu tiên tái cơ cấu nợ hơn là mở ví tiết kiệm mới.
+HTTP: 200 | Time: 18.44s | Runtime: aws_runtime | Mode: llm_enforce | Fallback: 
+ReasonCodes: mojibake_pattern_detected, no_service_above_threshold, normalized_nfc, risk_appetite_missing_soft_question, tool_status:goal_feasibility_v1:insufficient_input
+Tools: suitability_guard_v1, goal_feasibility_v1, recurring_cashflow_detect_v1, cashflow_forecast_v1, spend_analytics_v1, jar_allocation_suggest_v1
+ExpectedServiceFamilies: loans_credit
+DetectedServiceFamilies: savings_deposit
+Checks: HTTP_200, HAS_EXPECTED_TOOLS, SERVICE_EXACT_MISS, OUTPUT_NON_EMPTY
+Trace: trc_2caa0d49
+OutputHead:
+**Tổng Quan Chính**
+- Dòng tiền ròng âm -563,034,000 trong 3 tháng gần nhất.
+- Chưa có thông tin về mục tiêu tài chính, khó đánh giá khả thi kế hoạch.
+- Khẩu vị rủi ro của bạn hiện chưa được xác định.
+**Khuyến Nghị Tư Vấn**
+1. Hãy cung cấp mục tiêu tài chính cụ thể để đánh giá khả thi kế hoạch.
+2. Hãy xác định khẩu vị rủi ro của bạn để cá nhân hóa các khuyến nghị.
+**Giả Định Và Giới Hạn Dữ Liệu**
+- Giới hạn: Thiếu thông tin về mục tiêu tài chính.
+- Giới hạn: Không có dữ liệu về khẩu vị rủi ro.
+**Disclaimer**
+- Educational guidance only. We do not provide investment advice.
+
+======================================================================================================================
+SUMMARY
+Cases: 4 | PASS: 2 | FAIL: 2
+Runtime aws_runtime count: 4/4
+Still failing cases: HV07_MIXED_CARD_PRIORITY, HV08_MIXED_LOAN_PRIORITY

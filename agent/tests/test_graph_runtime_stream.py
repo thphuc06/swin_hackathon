@@ -225,6 +225,64 @@ class IntentRouterOverrideSafetyTests(unittest.TestCase):
         self.assertFalse(bool(route.get("clarify_needed")))
         self.assertNotIn("low_top2_gap", list(route.get("reason_codes", [])))
 
+    @patch("graph.extract_intent_with_bedrock")
+    def test_savings_deposit_override_skips_low_top2_clarification(self, mock_extract) -> None:
+        extraction = IntentExtractionV1(
+            intent="summary",
+            confidence=0.88,
+            top2=[
+                TopIntentScore(intent="summary", score=0.51),
+                TopIntentScore(intent="planning", score=0.49),
+            ],
+            slots={},
+            reason="test",
+        )
+        mock_extract.return_value = (extraction, [], {})
+        state = {
+            "response": "",
+            "prompt": "Dong tien 3 thang gan day cua toi duong deu, toi muon gui tiet kiem ky han 12 thang.",
+            "clarification": {"round": 0},
+            "scenario_request": {},
+            "extraction": {},
+            "route_decision": {},
+            "intent": "",
+            "user_profile": {},
+        }
+        next_state = graph.intent_router(state)
+        self.assertEqual(next_state.get("intent"), "planning")
+        route = next_state.get("route_decision", {})
+        self.assertFalse(bool(route.get("clarify_needed")))
+        self.assertNotIn("low_top2_gap", list(route.get("reason_codes", [])))
+
+    @patch("graph.extract_intent_with_bedrock")
+    def test_purchase_goal_override_skips_low_top2_clarification(self, mock_extract) -> None:
+        extraction = IntentExtractionV1(
+            intent="summary",
+            confidence=0.87,
+            top2=[
+                TopIntentScore(intent="summary", score=0.51),
+                TopIntentScore(intent="planning", score=0.49),
+            ],
+            slots={},
+            reason="test",
+        )
+        mock_extract.return_value = (extraction, [], {})
+        state = {
+            "response": "",
+            "prompt": "Tôi muốn mua điện thoại 20 triệu trong 8 tháng, có kế hoạch nào phù hợp không?",
+            "clarification": {"round": 0},
+            "scenario_request": {},
+            "extraction": {},
+            "route_decision": {},
+            "intent": "",
+            "user_profile": {},
+        }
+        next_state = graph.intent_router(state)
+        self.assertEqual(next_state.get("intent"), "planning")
+        route = next_state.get("route_decision", {})
+        self.assertFalse(bool(route.get("clarify_needed")))
+        self.assertNotIn("low_top2_gap", list(route.get("reason_codes", [])))
+
 
 if __name__ == "__main__":
     unittest.main()

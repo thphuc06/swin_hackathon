@@ -1,9 +1,9 @@
-name,doc_type,summary
-risk_suitability,policy,Risk suitability guidance and boundaries
-housing_affordability,template,Housing ETA template with assumptions
-no_upsell,policy,Explicit no-upsell policy and trust requirements
-services_savings_and_deposits,service,Category-level guidance for savings and deposit services
-services_loans_and_credit,service,Category-level guidance for loans and credit services
-services_cards_and_payments,service,Category-level guidance for card and payment services
-advisory_playbook_banking_services,playbook,Mapping user situations to service categories and actions
-service_terms_glossary,glossary,Simple definitions for financial service terms used in advice
+service_id,doc_type,status,family,intents_csv,trigger_facts_csv,trigger_keywords_vi_csv,trigger_keywords_en_csv,required_signals_csv,optional_signals_csv,blocked_signals_csv,risk_band_min,risk_band_max,disclosure_required,disclosure_refs_csv,priority,doc_path,summary
+,policy,active,,summary|risk|planning|scenario|invest,,,,,,,,,false,,50,policies.md,Risk suitability guidance and boundaries
+,template,active,,planning|scenario,,,,,,,,,false,,55,advisory_playbook_banking_services.md,Advisory playbook and response templates
+,policy,active,,summary|risk|planning|scenario|invest,,,,,,,,,false,,52,disclaimers.md,Education-only and disclosure requirements
+svc_savings_deposit,service,active,savings_deposit,summary|planning|scenario,spend.net_cashflow.|goal.gap_amount|recurring.fixed_cost_ratio,tiết kiệm|gửi tiết kiệm|kỳ hạn|tích lũy|dự phòng,savings|deposit|term deposit|recurring savings|buffer,cashflow_positive|goal_gap_high,runway_low|risk_conservative,cashflow_negative,conservative,aggressive,true,disclaimers.md#education-only,16,services_savings_and_deposits.md,Category-level guidance for savings and deposit services
+svc_loans_credit_support,service,active,loans_credit,risk|planning|summary,spend.net_cashflow.|goal.gap_amount|risk.overspend_propensity,vay|tái cơ cấu nợ|trả góp|hạn mức,loan|credit|debt|overdraft|installment,cashflow_negative|goal_gap_high|runway_low,overspend_high|volatility_high,,conservative,aggressive,true,disclaimers.md#loan-risk,19,services_loans_and_credit.md,Category-level guidance for loans and credit services
+svc_cards_payment_control,service,active,cards_payments,risk|summary|planning,anomaly.flags_count.|risk.overspend_propensity|spend.net_cashflow,hạn mức thẻ|cảnh báo giao dịch|thanh toán|thẻ tín dụng,card|payment|spend cap|transaction alert|debit card,anomaly_recent|overspend_high,cashflow_negative|volatility_high,,conservative,aggressive,true,disclaimers.md#cards-risk,18,services_cards_and_payments.md,Category-level guidance for card and payment services
+,playbook,active,,risk|planning|summary|scenario,,,,,,,,,false,,60,advisory_playbook_banking_services.md,Mapping user situations to service categories and actions
+,glossary,active,,summary|risk|planning|scenario|invest,,,,,,,,,false,,65,service_terms_glossary.md,Simple definitions for financial service terms used in advice

@@ -38,6 +38,7 @@ RAG KB notes
 - Vector store: OpenSearch Serverless (AWS-native, scales well)
 - Option: Aurora PostgreSQL-Compatible Edition (pgvector) if SQL-only desired
 - KB retrieval is served via MCP KB server (open-source) behind AgentCore Gateway
+- Decision lock for current phase: keep OpenSearch in tech stack (no platform swap); optimize algorithm layer only.
 
 Current implementation snapshot (Tier2 agent, as-built)
 - Entrypoint remains `POST /chat/stream` (SSE), no external API changes.
@@ -49,6 +50,11 @@ Current implementation snapshot (Tier2 agent, as-built)
   - Bedrock structured extraction (`intent_extraction_v1`)
   - deterministic planner policy (`router/policy.py`)
   - clarifying questions (1-2 MCQ) when confidence/slots are insufficient
+- Service suggestion uses dynamic matching (algorithm upgrade, stack unchanged):
+  - catalog-driven matching from `kb_index.csv` + service metadata
+  - context signal layer from tool facts (cashflow/anomaly/goal/risk)
+  - hybrid scoring (intent + signals + facts + semantic similarity + policy constraints)
+  - low-margin clarification for ambiguous top-2 service candidates
 - Tool execution is policy-bundle based (no keyword branch routing in runtime path):
   - `summary` -> spend + forecast + jar allocation
   - `risk` -> spend + anomaly + risk profile
@@ -217,6 +223,15 @@ Tier2 runtime flags (current)
 - `ENCODING_FAILFAST_SCORE_MIN=0.45`
 - `ENCODING_REPAIR_MIN_DELTA=0.10`
 - `ENCODING_NORMALIZATION_FORM=NFC`
+- `SERVICE_MATCHER_MODE=static|dynamic|dynamic_v2`
+- `SERVICE_MATCH_TOP_K=3`
+- `SERVICE_MATCH_MIN_SCORE=0.58`
+- `SERVICE_CATALOG_STRICT_VALIDATION=true`
+- `SERVICE_SIGNAL_REQUIRED_STRICT=true`
+- `SERVICE_CLARIFY_MARGIN_MIN=0.08`
+- `SERVICE_EMBED_ENABLED=true`
+- `SERVICE_EMBED_MODEL_ID=amazon.titan-embed-text-v2:0`
+- `SERVICE_EMBED_TOP_N=8`
 - Compatibility note: `ROUTER_MODE=rule` is currently coerced to semantic runtime path (safe default).
 
 Risk/Suitability guard

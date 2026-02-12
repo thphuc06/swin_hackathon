@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 import re
 from typing import Any, Dict
 
+from config import SERVICE_MATCHER_MODE
 from .contracts import EvidencePackV1, FactV1, LanguageCode
 from .normalize import fmt_money, fmt_pct, fmt_signed_money, safe_float
 
@@ -73,6 +75,10 @@ def _add_fact(
 
 def _avg(values: list[float]) -> float:
     return sum(values) / len(values) if values else 0.0
+
+
+def _service_matcher_mode() -> str:
+    return str(os.getenv("SERVICE_MATCHER_MODE") or SERVICE_MATCHER_MODE).strip().lower()
 
 
 _ANOMALY_FLAG_PRIORITY = {
@@ -871,6 +877,224 @@ def _extract_kb_service_facts(kb: Dict[str, Any], facts: list[FactV1]) -> None:
         )
 
 
+def _extract_service_signal_facts(
+    *,
+    facts: list[FactV1],
+    policy_flags: Dict[str, Any],
+) -> tuple[list[str], list[str]]:
+    reason_codes: list[str] = []
+    try:
+        from service_signals import extract_service_signals
+    except Exception:
+        reason_codes.append("service_signals_import_failed")
+        return [], reason_codes
+
+    signal_set = extract_service_signals(facts=facts, policy_flags=policy_flags)
+    for signal in signal_set.signals:
+        source_ids = list(signal_set.source_fact_ids.get(signal, []))
+        _add_fact(
+            facts,
+            fact_id=f"service.signal.{signal}",
+            label=f"Service signal: {signal}",
+            value=True,
+            value_text=signal,
+            source_tool="service_signal_layer",
+            source_path="facts",
+        )
+        if source_ids:
+            _add_fact(
+                facts,
+                fact_id=f"service.signal.{signal}.sources",
+                label=f"Service signal {signal} source facts",
+                value=source_ids,
+                value_text=", ".join(source_ids),
+                source_tool="service_signal_layer",
+                source_path="facts",
+            )
+
+    _add_fact(
+        facts,
+        fact_id="service.signal.count",
+        label="Number of service signals",
+        value=len(signal_set.signals),
+        value_text=str(len(signal_set.signals)),
+        source_tool="service_signal_layer",
+        source_path="facts",
+    )
+    _add_fact(
+        facts,
+        fact_id="service.signal.meta",
+        label="Service signal layer metadata",
+        value={
+            "signals": signal_set.signals,
+            "source_fact_ids": signal_set.source_fact_ids,
+            "thresholds": signal_set.thresholds,
+        },
+        value_text=str(len(signal_set.signals)),
+        source_tool="service_signal_layer",
+        source_path="extract_service_signals",
+    )
+    return signal_set.signals, reason_codes
+
+
+def _extract_service_match_facts(
+    *,
+    intent: str,
+    user_prompt: str,
+    kb: Dict[str, Any],
+    facts: list[FactV1],
+    policy_flags: Dict[str, Any],
+    service_signals: list[str],
+) -> list[str]:
+    """Populate service.match.* facts from dynamic service catalog matcher."""
+    reason_codes: list[str] = []
+    try:
+        from service_catalog import match_services
+    except Exception:
+        reason_codes.append("service_catalog_import_failed")
+        return reason_codes
+
+    kb_matches = kb.get("matches") if isinstance(kb, dict) else []
+    if not isinstance(kb_matches, list):
+        kb_matches = []
+
+    selected, meta = match_services(
+        intent=intent,
+        user_prompt=user_prompt,
+        evidence_facts=facts,
+        kb_matches=kb_matches,
+        policy_flags=policy_flags,
+        service_signals=service_signals,
+    )
+
+    for code in meta.get("reason_codes", []):
+        text = str(code or "").strip()
+        if text:
+            reason_codes.append(text)
+
+    # Emit compact matcher metadata as a single fact for audit propagation.
+    _add_fact(
+        facts,
+        fact_id="service.match.meta",
+        label="Service matcher metadata",
+        value={
+            "catalog_version": str(meta.get("catalog_version") or ""),
+            "mode": str(meta.get("mode") or ""),
+            "signals": list(meta.get("signals", [])),
+            "selected": [item.service_id for item in selected],
+            "candidates": meta.get("candidates", []),
+            "embedding_candidates": meta.get("embedding_candidates", []),
+            "filtered_by_policy": meta.get("filtered_by_policy", []),
+            "clarification_triggered": bool(meta.get("clarification_triggered")),
+            "clarification_options": list(meta.get("clarification_options", [])),
+            "margin": float(meta.get("margin") or 0.0),
+        },
+        value_text=str(len(selected)),
+        source_tool="service_catalog_matcher",
+        source_path="match_services",
+    )
+
+    _add_fact(
+        facts,
+        fact_id="service.match.count",
+        label="Number of matched services",
+        value=len(selected),
+        value_text=str(len(selected)),
+        source_tool="service_catalog_matcher",
+        source_path="selected",
+    )
+
+    for item in selected:
+        rank = max(1, int(getattr(item, "rank", 0) or 0))
+        prefix = f"service.match.{rank}"
+        _add_fact(
+            facts,
+            fact_id=f"{prefix}.id",
+            label=f"Matched service #{rank} id",
+            value=item.service_id,
+            value_text=item.service_id,
+            source_tool="service_catalog_matcher",
+            source_path=f"selected[{rank - 1}].service_id",
+        )
+        _add_fact(
+            facts,
+            fact_id=f"{prefix}.family",
+            label=f"Matched service #{rank} family",
+            value=item.family,
+            value_text=item.family,
+            source_tool="service_catalog_matcher",
+            source_path=f"selected[{rank - 1}].family",
+        )
+        _add_fact(
+            facts,
+            fact_id=f"{prefix}.title",
+            label=f"Matched service #{rank} title",
+            value=item.title,
+            value_text=item.title,
+            source_tool="service_catalog_matcher",
+            source_path=f"selected[{rank - 1}].title",
+        )
+        _add_fact(
+            facts,
+            fact_id=f"{prefix}.score",
+            label=f"Matched service #{rank} score",
+            value=float(item.score),
+            value_text=f"{float(item.score):.4f}",
+            unit="score",
+            source_tool="service_catalog_matcher",
+            source_path=f"selected[{rank - 1}].score",
+        )
+        _add_fact(
+            facts,
+            fact_id=f"{prefix}.disclosure_refs",
+            label=f"Matched service #{rank} disclosures",
+            value=list(item.disclosure_refs),
+            value_text=", ".join(item.disclosure_refs) if item.disclosure_refs else "none",
+            source_tool="service_catalog_matcher",
+            source_path=f"selected[{rank - 1}].disclosure_refs",
+        )
+        _add_fact(
+            facts,
+            fact_id=f"{prefix}.policy_reason_codes",
+            label=f"Matched service #{rank} policy reason codes",
+            value=list(item.reason_codes),
+            value_text=", ".join(item.reason_codes) if item.reason_codes else "ok",
+            source_tool="service_catalog_matcher",
+            source_path=f"selected[{rank - 1}].reason_codes",
+        )
+        _add_fact(
+            facts,
+            fact_id=f"{prefix}.matched_signals",
+            label=f"Matched service #{rank} signals",
+            value=list(item.matched_signals),
+            value_text=", ".join(item.matched_signals) if item.matched_signals else "none",
+            source_tool="service_catalog_matcher",
+            source_path=f"selected[{rank - 1}].matched_signals",
+        )
+        _add_fact(
+            facts,
+            fact_id=f"{prefix}.embedding_score",
+            label=f"Matched service #{rank} embedding score",
+            value=float(getattr(item, "embedding_score", 0.0)),
+            value_text=f"{float(getattr(item, 'embedding_score', 0.0)):.4f}",
+            unit="score",
+            source_tool="service_catalog_matcher",
+            source_path=f"selected[{rank - 1}].embedding_score",
+        )
+        _add_fact(
+            facts,
+            fact_id=f"{prefix}.margin_to_next",
+            label=f"Matched service #{rank} margin to next",
+            value=float(getattr(item, "margin_to_next", 0.0)),
+            value_text=f"{float(getattr(item, 'margin_to_next', 0.0)):.4f}",
+            unit="score",
+            source_tool="service_catalog_matcher",
+            source_path=f"selected[{rank - 1}].margin_to_next",
+        )
+
+    return sorted(set(code for code in reason_codes if code))
+
+
 def _required_prefixes_for_intent(intent: str) -> list[str]:
     if intent == "summary":
         return ["spend.", "forecast."]
@@ -889,12 +1113,14 @@ def build_evidence_pack(
     *,
     intent: str,
     language: LanguageCode,
+    user_prompt: str,
     tool_outputs: Dict[str, Any],
     kb: Dict[str, Any],
     policy_flags: Dict[str, Any],
     extraction_slots: Dict[str, Any] | None = None,
 ) -> tuple[EvidencePackV1, list[str]]:
     facts: list[FactV1] = []
+    reason_codes: list[str] = []
     _extract_spend_facts(tool_outputs, facts)
     _extract_forecast_facts(tool_outputs, facts)
     _extract_risk_facts(tool_outputs, facts)
@@ -905,9 +1131,26 @@ def build_evidence_pack(
     _extract_scenario_facts(tool_outputs, facts)
     _extract_guard_facts(tool_outputs, facts)
     _extract_slot_facts(extraction_slots or {}, facts)
-    _extract_kb_service_facts(kb, facts)
+    matcher_mode = _service_matcher_mode()
+    if matcher_mode in {"dynamic", "dynamic_v2"}:
+        service_signals, signal_reasons = _extract_service_signal_facts(
+            facts=facts,
+            policy_flags=policy_flags,
+        )
+        reason_codes.extend(signal_reasons)
+        reason_codes.extend(
+            _extract_service_match_facts(
+                intent=intent,
+                user_prompt=user_prompt,
+                kb=kb,
+                facts=facts,
+                policy_flags=policy_flags,
+                service_signals=service_signals,
+            )
+        )
+    else:
+        _extract_kb_service_facts(kb, facts)
 
-    reason_codes: list[str] = []
     required_prefixes = _required_prefixes_for_intent(intent)
     if not any(any(fact.fact_id.startswith(prefix) for prefix in required_prefixes) for fact in facts):
         reason_codes.append("insufficient_facts")

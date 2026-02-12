@@ -138,7 +138,79 @@ def _risk_appetite_from_context(advisory_context: AdvisoryContextV1) -> str:
     return "unknown"
 
 
+def _extract_service_matches(advisory_context: AdvisoryContextV1) -> list[dict[str, object]]:
+    rows: dict[int, dict[str, object]] = {}
+    for fact in advisory_context.facts:
+        fact_id = str(getattr(fact, "fact_id", "") or "").strip()
+        match = re.match(r"^service\.match\.(\d+)\.(id|family|title|score|disclosure_refs|matched_signals)$", fact_id)
+        if not match:
+            continue
+        rank = int(match.group(1))
+        key = match.group(2)
+        row = rows.setdefault(rank, {"rank": rank})
+        raw = getattr(fact, "value", None)
+        if key in {"id", "family", "title"}:
+            row[key] = str(raw or "").strip()
+        elif key == "score":
+            row[key] = _safe_float(raw, 0.0)
+        elif key in {"disclosure_refs", "matched_signals"}:
+            if isinstance(raw, list):
+                row[key] = [str(item).strip() for item in raw if str(item).strip()]
+            else:
+                row[key] = []
+    return [rows[idx] for idx in sorted(rows) if rows[idx].get("id")]
+
+
 def _service_suggestions(advisory_context: AdvisoryContextV1, *, vi: bool) -> list[str]:
+    service_matches = _extract_service_matches(advisory_context)
+    if service_matches:
+        suggestions: list[str] = []
+        for match in service_matches[:2]:
+            family = str(match.get("family") or "").strip().lower()
+            title = str(match.get("title") or match.get("id") or "service").strip()
+            disclosure_refs = match.get("disclosure_refs") if isinstance(match.get("disclosure_refs"), list) else []
+            matched_signals = match.get("matched_signals") if isinstance(match.get("matched_signals"), list) else []
+            disclosure_note = ""
+            if disclosure_refs:
+                first_ref = str(disclosure_refs[0]).strip()
+                if first_ref:
+                    disclosure_note = (
+                        f" (xem lưu ý {first_ref})"
+                        if vi
+                        else f" (see disclosure {first_ref})"
+                    )
+            signal_note = ""
+            if matched_signals:
+                first_signal = str(matched_signals[0]).strip()
+                if first_signal:
+                    signal_note = f" [{first_signal}]"
+
+            if family == "savings_deposit":
+                suggestions.append(
+                    f"Can nhac {title}{signal_note} de tang ky luat tich luy{disclosure_note}."
+                    if vi
+                    else f"Consider {title}{signal_note} to improve savings discipline{disclosure_note}."
+                )
+            elif family == "loans_credit":
+                suggestions.append(
+                    f"Can nhac {title}{signal_note} de giam ap luc dong tien ngan han{disclosure_note}."
+                    if vi
+                    else f"Consider {title}{signal_note} to reduce short-term cashflow pressure{disclosure_note}."
+                )
+            elif family == "cards_payments":
+                suggestions.append(
+                    f"Can nhac {title}{signal_note} de kiem soat chi tieu va canh bao giao dich{disclosure_note}."
+                    if vi
+                    else f"Consider {title}{signal_note} to control spending and transaction alerts{disclosure_note}."
+                )
+            else:
+                suggestions.append(
+                    f"Can nhac dich vu {title}{signal_note} theo muc tieu hien tai{disclosure_note}."
+                    if vi
+                    else f"Consider the {title} service{signal_note} for your current objective{disclosure_note}."
+                )
+        return suggestions[:2]
+
     fact_ids = {fact.fact_id for fact in advisory_context.facts}
     net_fact = _find_fact_by_prefix(advisory_context, "spend.net_cashflow.")
     goal_gap_fact = _find_fact_by_prefix(advisory_context, "goal.gap_amount")

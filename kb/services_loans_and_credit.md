@@ -1,3 +1,10 @@
+---
+service_id: svc_loans_credit_support
+family: loans_credit
+requires_disclosure: true
+disclosure_refs: disclaimers.md#loan-risk
+---
+
 # Banking Services - Loans And Credit
 
 ## Scope
@@ -54,4 +61,3 @@ No direct recommendation to borrow. No execution instruction.
 - Do not promise approval.
 - Do not provide exact loan pricing without verified source.
 - Always include repayment-risk explanation and disclaimer.
-

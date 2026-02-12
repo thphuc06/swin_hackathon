@@ -1,3 +1,10 @@
+---
+service_id: svc_cards_payment_control
+family: cards_payments
+requires_disclosure: true
+disclosure_refs: disclaimers.md#cards-risk
+---
+
 # Banking Services - Cards And Payments
 
 ## Scope
@@ -44,4 +51,3 @@ Educational guidance for cards, payment behavior, and expense control services.
 - No promotion language.
 - No specific card recommendation without current fee/reward data.
 - Explain tradeoff: convenience vs over-spend risk.
-

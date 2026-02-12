@@ -53,15 +53,19 @@ def _sync_kb_assets() -> None:
         raise FileNotFoundError(f"KB source directory not found: {source_dir}")
 
     md_files = sorted(source_dir.glob("*.md"))
+    index_file = source_dir / "kb_index.csv"
     if not md_files:
         raise FileNotFoundError(f"No KB markdown files found in: {source_dir}")
+    if not index_file.exists():
+        raise FileNotFoundError(f"KB index file not found: {index_file}")
 
     target_dir.mkdir(parents=True, exist_ok=True)
     for source_file in md_files:
         target_file = target_dir / source_file.name
         shutil.copy2(source_file, target_file)
+    shutil.copy2(index_file, target_dir / "kb_index.csv")
 
-    print(f"Synchronized KB assets: {len(md_files)} files -> {target_dir}")
+    print(f"Synchronized KB assets: {len(md_files) + 1} files -> {target_dir}")
 
 
 def _build_env_vars() -> dict[str, str]:
@@ -108,6 +112,24 @@ def _build_env_vars() -> dict[str, str]:
         "RESPONSE_POLICY_VERSION": os.getenv("DEPLOY_RESPONSE_POLICY_VERSION", "advice_policy_v1").strip()
         or "advice_policy_v1",
         "RESPONSE_MAX_RETRIES": os.getenv("DEPLOY_RESPONSE_MAX_RETRIES", "0").strip() or "0",
+        # Dynamic service matching v2
+        "SERVICE_MATCHER_MODE": os.getenv("DEPLOY_SERVICE_MATCHER_MODE", "dynamic_v2").strip() or "dynamic_v2",
+        "SERVICE_CATALOG_TTL_SECONDS": os.getenv("DEPLOY_SERVICE_CATALOG_TTL_SECONDS", "300").strip() or "300",
+        "SERVICE_MATCH_TOP_K": os.getenv("DEPLOY_SERVICE_MATCH_TOP_K", "3").strip() or "3",
+        "SERVICE_MATCH_MIN_SCORE": os.getenv("DEPLOY_SERVICE_MATCH_MIN_SCORE", "0.58").strip() or "0.58",
+        "SERVICE_CATALOG_STRICT_VALIDATION": os.getenv(
+            "DEPLOY_SERVICE_CATALOG_STRICT_VALIDATION", "true"
+        ).strip()
+        or "true",
+        "SERVICE_CATALOG_FORCE_RELOAD": os.getenv("DEPLOY_SERVICE_CATALOG_FORCE_RELOAD", "false").strip() or "false",
+        "SERVICE_SIGNAL_REQUIRED_STRICT": os.getenv("DEPLOY_SERVICE_SIGNAL_REQUIRED_STRICT", "true").strip()
+        or "true",
+        "SERVICE_CLARIFY_MARGIN_MIN": os.getenv("DEPLOY_SERVICE_CLARIFY_MARGIN_MIN", "0.08").strip() or "0.08",
+        # Hybrid semantic retrieval
+        "SERVICE_EMBED_ENABLED": os.getenv("DEPLOY_SERVICE_EMBED_ENABLED", "true").strip() or "true",
+        "SERVICE_EMBED_MODEL_ID": os.getenv("DEPLOY_SERVICE_EMBED_MODEL_ID", "amazon.titan-embed-text-v2:0").strip()
+        or "amazon.titan-embed-text-v2:0",
+        "SERVICE_EMBED_TOP_N": os.getenv("DEPLOY_SERVICE_EMBED_TOP_N", "8").strip() or "8",
         "ENCODING_GATE_ENABLED": os.getenv("DEPLOY_ENCODING_GATE_ENABLED", "true").strip() or "true",
         "ENCODING_REPAIR_ENABLED": os.getenv("DEPLOY_ENCODING_REPAIR_ENABLED", "true").strip() or "true",
         "ENCODING_REPAIR_SCORE_MIN": os.getenv("DEPLOY_ENCODING_REPAIR_SCORE_MIN", "0.12").strip() or "0.12",

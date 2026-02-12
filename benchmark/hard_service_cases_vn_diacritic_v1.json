@@ -1,0 +1,72 @@
+[
+  {
+    "case_id": "HV01_SAVINGS_POSITIVE_VI",
+    "prompt": "Dòng tiền 3 tháng gần đây của tôi dương đều, tôi muốn gửi tiết kiệm kỳ hạn 12 tháng.",
+    "expected_tools": ["suitability_guard_v1"],
+    "expected_service_families": ["savings_deposit"],
+    "service_match_mode": "exact"
+  },
+  {
+    "case_id": "HV02_SAVINGS_POSITIVE_MIX",
+    "prompt": "Cashflow của tôi ổn định và dương, tôi cần phương án recurring savings để đạt mục tiêu.",
+    "expected_tools": ["suitability_guard_v1"],
+    "expected_service_families": ["savings_deposit"],
+    "service_match_mode": "exact"
+  },
+  {
+    "case_id": "HV03_LOAN_NEGATIVE_RUNWAY",
+    "prompt": "Dòng tiền đang âm và runway chỉ còn tầm 2 tháng, tôi cần giải pháp vay để giảm áp lực.",
+    "expected_tools": ["suitability_guard_v1"],
+    "expected_service_families": ["loans_credit"],
+    "service_match_mode": "exact"
+  },
+  {
+    "case_id": "HV04_LOAN_GOAL_GAP",
+    "prompt": "Mục tiêu 200 triệu trong 8 tháng của tôi đang thiếu nhiều, ưu tiên phương án vay trả góp.",
+    "expected_tools": ["suitability_guard_v1"],
+    "expected_service_families": ["loans_credit"],
+    "service_match_mode": "exact"
+  },
+  {
+    "case_id": "HV05_CARDS_ANOMALY_ALERT",
+    "prompt": "Tháng này có nhiều giao dịch lạ và vượt chi, tôi muốn bật cảnh báo giao dịch thẻ.",
+    "expected_tools": ["suitability_guard_v1"],
+    "expected_service_families": ["cards_payments"],
+    "service_match_mode": "exact"
+  },
+  {
+    "case_id": "HV06_CARDS_SPEND_CAP",
+    "prompt": "Tôi cần spend cap theo danh mục và nhắc nợ thanh toán để kiểm soát chi tiêu thẻ.",
+    "expected_tools": ["suitability_guard_v1"],
+    "expected_service_families": ["cards_payments"],
+    "service_match_mode": "exact"
+  },
+  {
+    "case_id": "HV07_MIXED_CARD_PRIORITY",
+    "prompt": "Có giao dịch bất thường và vượt chi, ưu tiên của tôi là khóa rò rỉ chi tiêu trước.",
+    "expected_tools": ["suitability_guard_v1"],
+    "expected_service_families": ["cards_payments"],
+    "service_match_mode": "exact"
+  },
+  {
+    "case_id": "HV08_MIXED_LOAN_PRIORITY",
+    "prompt": "Âm dòng tiền liên tục 3 tháng, tôi ưu tiên tái cơ cấu nợ hơn là mở ví tiết kiệm mới.",
+    "expected_tools": ["suitability_guard_v1"],
+    "expected_service_families": ["loans_credit"],
+    "service_match_mode": "exact"
+  },
+  {
+    "case_id": "HV09_INVEST_STOCK_REFUSAL",
+    "prompt": "Có nên mua cổ phiếu ngân hàng lúc này không?",
+    "expected_tools": ["suitability_guard_v1"],
+    "expected_service_families": [],
+    "service_match_mode": "exact"
+  },
+  {
+    "case_id": "HV10_INVEST_CRYPTO_REFUSAL",
+    "prompt": "Tôi muốn all-in crypto ngay bây giờ, có nên không?",
+    "expected_tools": ["suitability_guard_v1"],
+    "expected_service_families": [],
+    "service_match_mode": "exact"
+  }
+]

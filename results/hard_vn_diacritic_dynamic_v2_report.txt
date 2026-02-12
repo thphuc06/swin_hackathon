@@ -1,0 +1,587 @@
+TOOLS COVERAGE BENCHMARK REPORT (hard_vn_diacritic | aws_runtime)
+Generated at: 2026-02-12 18:16:27
+Base URL: http://127.0.0.1:8010/chat/stream
+Cases file: benchmark/hard_service_cases_vn_diacritic_v1.json
+
+========================================================================================================================
+[HV01_SAVINGS_POSITIVE_VI] FAIL
+Prompt: Dòng tiền 3 tháng gần đây của tôi dương đều, tôi muốn gửi tiết kiệm kỳ hạn 12 tháng.
+HTTP: 200 | Time: 19.65s | Runtime: aws_runtime | Mode: llm_enforce | Fallback: 
+ReasonCodes: clean_utf8, intent_override:savings_deposit_to_planning, kb_index_missing, normalized_nfc, risk_appetite_missing_soft_question, service_catalog_empty, tool_status:goal_feasibility_v1:insufficient_input
+Tools: suitability_guard_v1, goal_feasibility_v1, cashflow_forecast_v1, recurring_cashflow_detect_v1, jar_allocation_suggest_v1, spend_analytics_v1
+ExpectedServiceFamilies: savings_deposit
+ServiceMatchMode: exact
+DetectedServiceFamilies: 
+Checks: HTTP_200, HAS_EXPECTED_TOOLS, SERVICE_EXACT_MISS, OUTPUT_NON_EMPTY, NO_FALLBACK
+Trace: trc_146f173a
+OutputHead:
+**Tổng Quan Chính**
+- Dòng tiền ròng -571,196,000 trong 90 ngày gần đây.
+- Thu nhập dự báo trung bình hàng tuần là 140,289,375.
+- Chi tiêu dự báo trung bình hàng tuần là 150,262,750.
+**Khuyến Nghị Tư Vấn**
+1. Hãy cung cấp mục tiêu tài chính cụ thể để đánh giá khả thi.
+2. Xác định khẩu vị rủi ro của bạn để cá nhân hóa khuyến nghị.
+**Giả Định Và Giới Hạn Dữ Liệu**
+- Giới hạn: Dữ liệu mục tiêu tài chính hiện không đủ.
+**Disclaimer**
+- Educational guidance only. We do not provide investment advice.
+RAW_SSE:
+data: **Tổng Quan Chính**
+data: - Dòng tiền ròng -571,196,000 trong 90 ngày gần đây.
+data: - Thu nhập dự báo trung bình hàng tuần là 140,289,375.
+data: - Chi tiêu dự báo trung bình hàng tuần là 150,262,750.
+data: 
+data: **Khuyến Nghị Tư Vấn**
+data: 1. Hãy cung cấp mục tiêu tài chính cụ thể để đánh giá khả thi.
+data: 2. Xác định khẩu vị rủi ro của bạn để cá nhân hóa khuyến nghị.
+data: 
+data: **Giả Định Và Giới Hạn Dữ Liệu**
+data: - Giới hạn: Dữ liệu mục tiêu tài chính hiện không đủ.
+data: 
+data: **Disclaimer**
+data: - Educational guidance only. We do not provide investment advice.
+data: 
+data: Citations: service_terms_glossary.md, policies.md, policies.md
+data: 
+data: Trace: trc_146f173a
+data: 
+data: Tools: suitability_guard_v1, goal_feasibility_v1, cashflow_forecast_v1, recurring_cashflow_detect_v1, jar_allocation_suggest_v1, spend_analytics_v1
+
+data: RuntimeSource: aws_runtime
+
+data: ResponseMode: llm_enforce
+
+data: ResponseReasonCodes: clean_utf8, intent_override:savings_deposit_to_planning, kb_index_missing, normalized_nfc, risk_appetite_missing_soft_question, service_catalog_empty, tool_status:goal_feasibility_v1:insufficient_input
+
+data: Trace: trc_146f173a
+
+data: Citations: service_terms_glossary.md, policies.md, policies.md
+
+data: Tools: suitability_guard_v1, goal_feasibility_v1, cashflow_forecast_v1, recurring_cashflow_detect_v1, jar_allocation_suggest_v1, spend_analytics_v1
+
+data: Disclaimer: Educational guidance only. We do not provide investment advice.
+
+
+========================================================================================================================
+[HV02_SAVINGS_POSITIVE_MIX] FAIL
+Prompt: Cashflow của tôi ổn định và dương, tôi cần phương án recurring savings để đạt mục tiêu.
+HTTP: 200 | Time: 19.67s | Runtime: aws_runtime | Mode: llm_enforce | Fallback: 
+ReasonCodes: clean_utf8, intent_override:savings_deposit_to_planning, kb_index_missing, normalized_nfc, risk_appetite_missing_soft_question, service_catalog_empty, tool_status:goal_feasibility_v1:insufficient_input
+Tools: suitability_guard_v1, goal_feasibility_v1, cashflow_forecast_v1, spend_analytics_v1, jar_allocation_suggest_v1, recurring_cashflow_detect_v1
+ExpectedServiceFamilies: savings_deposit
+ServiceMatchMode: exact
+DetectedServiceFamilies: 
+Checks: HTTP_200, HAS_EXPECTED_TOOLS, SERVICE_EXACT_MISS, OUTPUT_NON_EMPTY, NO_FALLBACK
+Trace: trc_da1ebcd0
+OutputHead:
+**Tổng Quan Chính**
+- Dòng tiền ròng hiện tại là -677,869,000, thu nhập dự báo trung bình hàng tuần là 140,289,375.
+- Tỷ lệ chi phí cố định trong 6 tháng qua là 15.57%.
+- Chưa có thông tin về mục tiêu tài chính cụ thể.
+**Khuyến Nghị Tư Vấn**
+1. Bạn ưu tiên khẩu vị rủi ro nào: thấp, vừa hay cao? Tôi sẽ tinh chỉnh kế hoạch sau khi bạn chọn.
+2. Hãy cung cấp mục tiêu tài chính cụ thể để đánh giá khả thi và đề xuất phương án tiết kiệm định kỳ.
+3. Xem xét việc sử dụng tính năng tiết kiệm tự động để tăng cường khả năng đạt mục tiêu.
+4. Liên hệ tư vấn viên để tìm hiểu thêm về các sản phẩm tiết kiệm phù hợp.
+**Giả Định Và Giới Hạn Dữ Liệu**
+- Giới hạn: Chưa có thông tin về khẩu vị rủi ro, hãy cung cấp thông tin này để cá nhân hóa đề xuất.
+**Disclaimer**
+- Educational guidance only. We do not provide investment advice.
+RAW_SSE:
+data: **Tổng Quan Chính**
+data: - Dòng tiền ròng hiện tại là -677,869,000, thu nhập dự báo trung bình hàng tuần là 140,289,375.
+data: - Tỷ lệ chi phí cố định trong 6 tháng qua là 15.57%.
+data: - Chưa có thông tin về mục tiêu tài chính cụ thể.
+data: 
+data: **Khuyến Nghị Tư Vấn**
+data: 1. Bạn ưu tiên khẩu vị rủi ro nào: thấp, vừa hay cao? Tôi sẽ tinh chỉnh kế hoạch sau khi bạn chọn.
+data: 2. Hãy cung cấp mục tiêu tài chính cụ thể để đánh giá khả thi và đề xuất phương án tiết kiệm định kỳ.
+data: 3. Xem xét việc sử dụng tính năng tiết kiệm tự động để tăng cường khả năng đạt mục tiêu.
+data: 4. Liên hệ tư vấn viên để tìm hiểu thêm về các sản phẩm tiết kiệm phù hợp.
+data: 
+data: **Giả Định Và Giới Hạn Dữ Liệu**
+data: - Giới hạn: Chưa có thông tin về khẩu vị rủi ro, hãy cung cấp thông tin này để cá nhân hóa đề xuất.
+data: 
+data: **Disclaimer**
+data: - Educational guidance only. We do not provide investment advice.
+data: 
+data: Citations: service_terms_glossary.md, policies.md, policies.md
+data: 
+data: Trace: trc_da1ebcd0
+data: 
+data: Tools: suitability_guard_v1, goal_feasibility_v1, cashflow_forecast_v1, spend_analytics_v1, jar_allocation_suggest_v1, recurring_cashflow_detect_v1
+
+data: RuntimeSource: aws_runtime
+
+data: ResponseMode: llm_enforce
+
+data: ResponseReasonCodes: clean_utf8, intent_override:savings_deposit_to_planning, kb_index_missing, normalized_nfc, risk_appetite_missing_soft_question, service_catalog_empty, tool_status:goal_feasibility_v1:insufficient_input
+
+data: Trace: trc_da1ebcd0
+
+data: Citations: service_terms_glossary.md, policies.md, policies.md
+
+data: Tools: suitability_guard_v1, goal_feasibility_v1, cashflow_forecast_v1, spend_analytics_v1, jar_allocation_suggest_v1, recurring_cashflow_detect_v1
+
+data: Disclaimer: Educational guidance only. We do not provide investment advice.
+
+
+========================================================================================================================
+[HV03_LOAN_NEGATIVE_RUNWAY] PASS
+Prompt: Dòng tiền đang âm và runway chỉ còn tầm 2 tháng, tôi cần giải pháp vay để giảm áp lực.
+HTTP: 200 | Time: 17.39s | Runtime: aws_runtime | Mode: llm_enforce | Fallback: 
+ReasonCodes: clean_utf8, kb_index_missing, normalized_nfc, risk_appetite_missing_soft_question, service_catalog_empty, tool_status:goal_feasibility_v1:insufficient_input
+Tools: suitability_guard_v1, goal_feasibility_v1, cashflow_forecast_v1, spend_analytics_v1, jar_allocation_suggest_v1, recurring_cashflow_detect_v1
+ExpectedServiceFamilies: loans_credit
+ServiceMatchMode: exact
+DetectedServiceFamilies: loans_credit
+Checks: HTTP_200, HAS_EXPECTED_TOOLS, SERVICE_EXACT_MATCH, OUTPUT_NON_EMPTY, NO_FALLBACK
+Trace: trc_4c175000
+OutputHead:
+**Tổng Quan Chính**
+- Dòng tiền ròng hiện tại đang âm -535,836,000, gây áp lực tài chính.
+- Thu nhập dự báo trung bình hàng tuần 140,289,375 thấp hơn chi tiêu dự báo 150,262,750.
+- Cần xác định khẩu vị rủi ro của bạn để đưa ra khuyến nghị phù hợp.
+**Khuyến Nghị Tư Vấn**
+1. Liên hệ với chúng tôi để thảo luận về các giải pháp vay vốn phù hợp với tình hình tài chính hiện tại.
+2. Vui lòng cung cấp thông tin về mục tiêu tài chính của bạn để chúng tôi có thể đánh giá khả thi.
+3. Hãy cho chúng tôi biết khẩu vị rủi ro của bạn (thấp, trung bình, cao) để chúng tôi có thể cá nhân hóa khuyến nghị.
+**Giả Định Và Giới Hạn Dữ Liệu**
+- Giới hạn: Dữ liệu mục tiêu tài chính hiện không đủ để đánh giá khả thi.
+**Disclaimer**
+- Educational guidance only. We do not provide investment advice.
+RAW_SSE:
+data: **Tổng Quan Chính**
+data: - Dòng tiền ròng hiện tại đang âm -535,836,000, gây áp lực tài chính.
+data: - Thu nhập dự báo trung bình hàng tuần 140,289,375 thấp hơn chi tiêu dự báo 150,262,750.
+data: - Cần xác định khẩu vị rủi ro của bạn để đưa ra khuyến nghị phù hợp.
+data: 
+data: **Khuyến Nghị Tư Vấn**
+data: 1. Liên hệ với chúng tôi để thảo luận về các giải pháp vay vốn phù hợp với tình hình tài chính hiện tại.
+data: 2. Vui lòng cung cấp thông tin về mục tiêu tài chính của bạn để chúng tôi có thể đánh giá khả thi.
+data: 3. Hãy cho chúng tôi biết khẩu vị rủi ro của bạn (thấp, trung bình, cao) để chúng tôi có thể cá nhân hóa khuyến nghị.
+data: 
+data: **Giả Định Và Giới Hạn Dữ Liệu**
+data: - Giới hạn: Dữ liệu mục tiêu tài chính hiện không đủ để đánh giá khả thi.
+data: 
+data: **Disclaimer**
+data: - Educational guidance only. We do not provide investment advice.
+data: 
+data: Citations: service_terms_glossary.md, policies.md, policies.md
+data: 
+data: Trace: trc_4c175000
+data: 
+data: Tools: suitability_guard_v1, goal_feasibility_v1, cashflow_forecast_v1, spend_analytics_v1, jar_allocation_suggest_v1, recurring_cashflow_detect_v1
+
+data: RuntimeSource: aws_runtime
+
+data: ResponseMode: llm_enforce
+
+data: ResponseReasonCodes: clean_utf8, kb_index_missing, normalized_nfc, risk_appetite_missing_soft_question, service_catalog_empty, tool_status:goal_feasibility_v1:insufficient_input
+
+data: Trace: trc_4c175000
+
+data: Citations: service_terms_glossary.md, policies.md, policies.md
+
+data: Tools: suitability_guard_v1, goal_feasibility_v1, cashflow_forecast_v1, spend_analytics_v1, jar_allocation_suggest_v1, recurring_cashflow_detect_v1
+
+data: Disclaimer: Educational guidance only. We do not provide investment advice.
+
+
+========================================================================================================================
+[HV04_LOAN_GOAL_GAP] PASS
+Prompt: Mục tiêu 200 triệu trong 8 tháng của tôi đang thiếu nhiều, ưu tiên phương án vay trả góp.
+HTTP: 200 | Time: 19.97s | Runtime: aws_runtime | Mode: llm_enforce | Fallback: 
+ReasonCodes: clean_utf8, kb_index_missing, normalized_nfc, risk_appetite_missing_soft_question, service_catalog_empty
+Tools: suitability_guard_v1, jar_allocation_suggest_v1, cashflow_forecast_v1, goal_feasibility_v1, spend_analytics_v1, recurring_cashflow_detect_v1
+ExpectedServiceFamilies: loans_credit
+ServiceMatchMode: exact
+DetectedServiceFamilies: loans_credit
+Checks: HTTP_200, HAS_EXPECTED_TOOLS, SERVICE_EXACT_MATCH, OUTPUT_NON_EMPTY, NO_FALLBACK
+Trace: trc_2a56a702
+OutputHead:
+**Tổng Quan Chính**
+- Mục tiêu tiết kiệm 200 triệu trong 8 tháng của bạn hiện đang thiếu 200,000,000.
+- Dòng tiền ròng của bạn trong 240 ngày qua là âm -440,311,000.
+- Vui lòng xác nhận khẩu vị rủi ro của bạn để chúng tôi có thể đưa ra các khuyến nghị phù hợp.
+**Khuyến Nghị Tư Vấn**
+1. Xác nhận khẩu vị rủi ro của bạn để chúng tôi có thể đưa ra các khuyến nghị phù hợp.
+2. Xem xét các tùy chọn vay trả góp để hỗ trợ đạt được mục tiêu tiết kiệm.
+**Giả Định Và Giới Hạn Dữ Liệu**
+- Giới hạn: Không có dữ liệu về khẩu vị rủi ro của bạn.
+**Disclaimer**
+- Educational guidance only. We do not provide investment advice.
+RAW_SSE:
+data: **Tổng Quan Chính**
+data: - Mục tiêu tiết kiệm 200 triệu trong 8 tháng của bạn hiện đang thiếu 200,000,000.
+data: - Dòng tiền ròng của bạn trong 240 ngày qua là âm -440,311,000.
+data: - Vui lòng xác nhận khẩu vị rủi ro của bạn để chúng tôi có thể đưa ra các khuyến nghị phù hợp.
+data: 
+data: **Khuyến Nghị Tư Vấn**
+data: 1. Xác nhận khẩu vị rủi ro của bạn để chúng tôi có thể đưa ra các khuyến nghị phù hợp.
+data: 2. Xem xét các tùy chọn vay trả góp để hỗ trợ đạt được mục tiêu tiết kiệm.
+data: 
+data: **Giả Định Và Giới Hạn Dữ Liệu**
+data: - Giới hạn: Không có dữ liệu về khẩu vị rủi ro của bạn.
+data: 
+data: **Disclaimer**
+data: - Educational guidance only. We do not provide investment advice.
+data: 
+data: Citations: service_terms_glossary.md, policies.md, policies.md
+data: 
+data: Trace: trc_2a56a702
+data: 
+data: Tools: suitability_guard_v1, jar_allocation_suggest_v1, cashflow_forecast_v1, goal_feasibility_v1, spend_analytics_v1, recurring_cashflow_detect_v1
+
+data: RuntimeSource: aws_runtime
+
+data: ResponseMode: llm_enforce
+
+data: ResponseReasonCodes: clean_utf8, kb_index_missing, normalized_nfc, risk_appetite_missing_soft_question, service_catalog_empty
+
+data: Trace: trc_2a56a702
+
+data: Citations: service_terms_glossary.md, policies.md, policies.md
+
+data: Tools: suitability_guard_v1, jar_allocation_suggest_v1, cashflow_forecast_v1, goal_feasibility_v1, spend_analytics_v1, recurring_cashflow_detect_v1
+
+data: Disclaimer: Educational guidance only. We do not provide investment advice.
+
+
+========================================================================================================================
+[HV05_CARDS_ANOMALY_ALERT] PASS
+Prompt: Tháng này có nhiều giao dịch lạ và vượt chi, tôi muốn bật cảnh báo giao dịch thẻ.
+HTTP: 200 | Time: 16.81s | Runtime: aws_runtime | Mode: llm_enforce | Fallback: 
+ReasonCodes: clean_utf8, intent_override:anomaly_to_risk, kb_index_missing, normalized_nfc, service_catalog_empty
+Tools: suitability_guard_v1, risk_profile_non_investment_v1, anomaly_signals_v1, spend_analytics_v1
+ExpectedServiceFamilies: cards_payments
+ServiceMatchMode: exact
+DetectedServiceFamilies: cards_payments
+Checks: HTTP_200, HAS_EXPECTED_TOOLS, SERVICE_EXACT_MATCH, OUTPUT_NON_EMPTY, NO_FALLBACK
+Trace: trc_72c8afd7
+OutputHead:
+**Tổng Quan Chính**
+- Trong 30 ngày gần nhất, có 2 cảnh báo bất thường, chủ yếu là do chi tiêu tăng đột biến và dự trữ thấp.
+- Mức rủi ro hiện tại là trung bình, nhưng xác suất vượt chi cao.
+- Runway dự phòng hiện tại chỉ còn khoảng 2.51 tháng.
+- Lý do cảnh báo nổi bật 1: Danh mục Groceries tăng tỉ trọng 15.42% với mức chi 104,527,000.
+- Lý do cảnh báo nổi bật 2: Runway ước tính còn 17.88 ngày, dưới ngưỡng an toàn 90 ngày.
+- Số cảnh báo bất thường: 2 (30d)
+- Mức rủi ro: trung bình (60d)
+- Runway dự phòng: 2.51 tháng (60d)
+**Khuyến Nghị Tư Vấn**
+1. Bật cảnh báo giao dịch thẻ để theo dõi và kiểm soát chi tiêu.
+2. Xem xét các dịch vụ hỗ trợ quản lý chi tiêu để đảm bảo an toàn tài chính.
+**Giả Định Và Giới Hạn Dữ Liệu**
+- Giới hạn: Không có dữ liệu về thu nhập và chi tiêu trong 12 ngày gần nhất.
+RAW_SSE:
+data: **Tổng Quan Chính**
+data: - Trong 30 ngày gần nhất, có 2 cảnh báo bất thường, chủ yếu là do chi tiêu tăng đột biến và dự trữ thấp.
+data: - Mức rủi ro hiện tại là trung bình, nhưng xác suất vượt chi cao.
+data: - Runway dự phòng hiện tại chỉ còn khoảng 2.51 tháng.
+data: - Lý do cảnh báo nổi bật 1: Danh mục Groceries tăng tỉ trọng 15.42% với mức chi 104,527,000.
+data: - Lý do cảnh báo nổi bật 2: Runway ước tính còn 17.88 ngày, dưới ngưỡng an toàn 90 ngày.
+data: - Số cảnh báo bất thường: 2 (30d)
+data: - Mức rủi ro: trung bình (60d)
+data: - Runway dự phòng: 2.51 tháng (60d)
+data: 
+data: **Khuyến Nghị Tư Vấn**
+data: 1. Bật cảnh báo giao dịch thẻ để theo dõi và kiểm soát chi tiêu.
+data: 2. Xem xét các dịch vụ hỗ trợ quản lý chi tiêu để đảm bảo an toàn tài chính.
+data: 
+data: **Giả Định Và Giới Hạn Dữ Liệu**
+data: - Giới hạn: Không có dữ liệu về thu nhập và chi tiêu trong 12 ngày gần nhất.
+data: 
+data: **Disclaimer**
+data: - Educational guidance only. We do not provide investment advice.
+data: 
+data: Citations: policies.md, service_terms_glossary.md, service_terms_glossary.md
+data: 
+data: Trace: trc_72c8afd7
+data: 
+data: Tools: suitability_guard_v1, risk_profile_non_investment_v1, anomaly_signals_v1, spend_analytics_v1
+
+data: RuntimeSource: aws_runtime
+
+data: ResponseMode: llm_enforce
+
+data: ResponseReasonCodes: clean_utf8, intent_override:anomaly_to_risk, kb_index_missing, normalized_nfc, service_catalog_empty
+
+data: Trace: trc_72c8afd7
+
+data: Citations: policies.md, service_terms_glossary.md, service_terms_glossary.md
+
+data: Tools: suitability_guard_v1, risk_profile_non_investment_v1, anomaly_signals_v1, spend_analytics_v1
+
+data: Disclaimer: Educational guidance only. We do not provide investment advice.
+
+
+========================================================================================================================
+[HV06_CARDS_SPEND_CAP] PASS
+Prompt: Tôi cần spend cap theo danh mục và nhắc nợ thanh toán để kiểm soát chi tiêu thẻ.
+HTTP: 200 | Time: 8.98s | Runtime: aws_runtime | Mode: llm_enforce | Fallback: 
+ReasonCodes: clean_utf8, kb_index_missing, normalized_nfc, service_catalog_empty
+Tools: suitability_guard_v1
+ExpectedServiceFamilies: cards_payments
+ServiceMatchMode: exact
+DetectedServiceFamilies: cards_payments
+Checks: HTTP_200, HAS_EXPECTED_TOOLS, SERVICE_EXACT_MATCH, OUTPUT_NON_EMPTY, NO_FALLBACK
+Trace: trc_1b2925ce
+OutputHead:
+**Tổng Quan Chính**
+- Có dữ liệu kho dịch vụ ngân hàng để đề xuất theo tình huống.
+- Hiện không có dịch vụ nào phù hợp với yêu cầu của bạn.
+- Đã tổng hợp thông tin từ các fact đã xác thực.
+- Nội dung đang giới hạn trong phạm vi dữ liệu từ tool.
+- Bạn có thể bổ sung mục tiêu cụ thể để nhận khuyến nghị sắc nét hơn.
+- Trạng thái policy cho phép: allow
+- Quyết định suitability: allow
+- Number of matched services: 0
+**Khuyến Nghị Tư Vấn**
+1. Hãy liên hệ với chúng tôi để tư vấn về dịch vụ phù hợp.
+2. Xem xét lại ngân sách hàng tuần để đảm bảo kiểm soát chi tiêu.
+**Giả Định Và Giới Hạn Dữ Liệu**
+- Giới hạn: Không có dịch vụ nào phù hợp với yêu cầu hiện tại của bạn.
+RAW_SSE:
+data: **Tổng Quan Chính**
+data: - Có dữ liệu kho dịch vụ ngân hàng để đề xuất theo tình huống.
+data: - Hiện không có dịch vụ nào phù hợp với yêu cầu của bạn.
+data: - Đã tổng hợp thông tin từ các fact đã xác thực.
+data: - Nội dung đang giới hạn trong phạm vi dữ liệu từ tool.
+data: - Bạn có thể bổ sung mục tiêu cụ thể để nhận khuyến nghị sắc nét hơn.
+data: - Trạng thái policy cho phép: allow
+data: - Quyết định suitability: allow
+data: - Number of matched services: 0
+data: 
+data: **Khuyến Nghị Tư Vấn**
+data: 1. Hãy liên hệ với chúng tôi để tư vấn về dịch vụ phù hợp.
+data: 2. Xem xét lại ngân sách hàng tuần để đảm bảo kiểm soát chi tiêu.
+data: 
+data: **Giả Định Và Giới Hạn Dữ Liệu**
+data: - Giới hạn: Không có dịch vụ nào phù hợp với yêu cầu hiện tại của bạn.
+data: 
+data: **Disclaimer**
+data: - Educational guidance only. We do not provide investment advice.
+data: 
+data: Citations: service_terms_glossary.md, service_terms_glossary.md
+data: 
+data: Trace: trc_1b2925ce
+data: 
+data: Tools: suitability_guard_v1
+
+data: RuntimeSource: aws_runtime
+
+data: ResponseMode: llm_enforce
+
+data: ResponseReasonCodes: clean_utf8, kb_index_missing, normalized_nfc, service_catalog_empty
+
+data: Trace: trc_1b2925ce
+
+data: Citations: service_terms_glossary.md, service_terms_glossary.md
+
+data: Tools: suitability_guard_v1
+
+data: Disclaimer: Educational guidance only. We do not provide investment advice.
+
+
+========================================================================================================================
+[HV07_MIXED_CARD_PRIORITY] FAIL
+Prompt: Có giao dịch bất thường và vượt chi, ưu tiên của tôi là khóa rò rỉ chi tiêu trước.
+HTTP: 200 | Time: 16.27s | Runtime: aws_runtime | Mode: llm_enforce | Fallback: 
+ReasonCodes: clean_utf8, intent_override:anomaly_to_risk, kb_index_missing, normalized_nfc, service_catalog_empty
+Tools: suitability_guard_v1, risk_profile_non_investment_v1, anomaly_signals_v1, spend_analytics_v1
+ExpectedServiceFamilies: cards_payments
+ServiceMatchMode: exact
+DetectedServiceFamilies: 
+Checks: HTTP_200, HAS_EXPECTED_TOOLS, SERVICE_EXACT_MISS, OUTPUT_NON_EMPTY, NO_FALLBACK
+Trace: trc_4561c371
+OutputHead:
+**Tổng Quan Chính**
+- Có 1 cảnh báo bất thường (dấu hiệu giao dịch lạ) trong cửa sổ hiện tại.
+- Dòng tiền ròng -571,196,000, tỷ lệ vượt chi 33.33%.
+- Ngày bất thường gần nhất là 2026-01-16.
+- Lý do cảnh báo nổi bật 1: Phát hiện điểm đổi chế độ chi tiêu, mốc gần nhất là 2026-01-16.
+**Khuyến Nghị Tư Vấn**
+1. Xem xét khóa thẻ thanh toán tạm thời để ngăn rò rỉ chi tiêu.
+2. Liên hệ tư vấn viên để xem xét các dịch vụ quản lý chi tiêu.
+**Giả Định Và Giới Hạn Dữ Liệu**
+- Giới hạn: Không có dịch vụ phù hợp nào được tìm thấy trong danh mục dịch vụ.
+**Disclaimer**
+- Educational guidance only. We do not provide investment advice.
+RAW_SSE:
+data: **Tổng Quan Chính**
+data: - Có 1 cảnh báo bất thường (dấu hiệu giao dịch lạ) trong cửa sổ hiện tại.
+data: - Dòng tiền ròng -571,196,000, tỷ lệ vượt chi 33.33%.
+data: - Ngày bất thường gần nhất là 2026-01-16.
+data: - Lý do cảnh báo nổi bật 1: Phát hiện điểm đổi chế độ chi tiêu, mốc gần nhất là 2026-01-16.
+data: 
+data: **Khuyến Nghị Tư Vấn**
+data: 1. Xem xét khóa thẻ thanh toán tạm thời để ngăn rò rỉ chi tiêu.
+data: 2. Liên hệ tư vấn viên để xem xét các dịch vụ quản lý chi tiêu.
+data: 
+data: **Giả Định Và Giới Hạn Dữ Liệu**
+data: - Giới hạn: Không có dịch vụ phù hợp nào được tìm thấy trong danh mục dịch vụ.
+data: 
+data: **Disclaimer**
+data: - Educational guidance only. We do not provide investment advice.
+data: 
+data: Citations: policies.md, service_terms_glossary.md, service_terms_glossary.md
+data: 
+data: Trace: trc_4561c371
+data: 
+data: Tools: suitability_guard_v1, risk_profile_non_investment_v1, anomaly_signals_v1, spend_analytics_v1
+
+data: RuntimeSource: aws_runtime
+
+data: ResponseMode: llm_enforce
+
+data: ResponseReasonCodes: clean_utf8, intent_override:anomaly_to_risk, kb_index_missing, normalized_nfc, service_catalog_empty
+
+data: Trace: trc_4561c371
+
+data: Citations: policies.md, service_terms_glossary.md, service_terms_glossary.md
+
+data: Tools: suitability_guard_v1, risk_profile_non_investment_v1, anomaly_signals_v1, spend_analytics_v1
+
+data: Disclaimer: Educational guidance only. We do not provide investment advice.
+
+
+========================================================================================================================
+[HV08_MIXED_LOAN_PRIORITY] FAIL
+Prompt: Âm dòng tiền liên tục 3 tháng, tôi ưu tiên tái cơ cấu nợ hơn là mở ví tiết kiệm mới.
+HTTP: 200 | Time: 15.53s | Runtime: aws_runtime | Mode: llm_enforce | Fallback: 
+ReasonCodes: kb_index_missing, mojibake_pattern_detected, normalized_nfc, risk_appetite_missing_soft_question, service_catalog_empty, tool_status:goal_feasibility_v1:insufficient_input
+Tools: suitability_guard_v1, goal_feasibility_v1, recurring_cashflow_detect_v1, cashflow_forecast_v1, jar_allocation_suggest_v1, spend_analytics_v1
+ExpectedServiceFamilies: loans_credit
+ServiceMatchMode: exact
+DetectedServiceFamilies: 
+Checks: HTTP_200, HAS_EXPECTED_TOOLS, SERVICE_EXACT_MISS, OUTPUT_NON_EMPTY, NO_FALLBACK
+Trace: trc_4ab4a2f3
+OutputHead:
+**Tổng Quan Chính**
+- Dòng tiền ròng âm -571,196,000 trong 3 tháng gần đây.
+- Chưa có thông tin về mục tiêu tài chính, làm khó việc đánh giá khả thi.
+- Không có dữ liệu về khẩu vị rủi ro, cần hỏi thêm để cá nhân hóa khuyên nghị.
+**Khuyến Nghị Tư Vấn**
+1. Hãy cung cấp thông tin về mục tiêu tài chính của bạn để đánh giá khả thi.
+2. Hãy chọn mức độ khẩu vị rủi ro phù hợp (thấp, trung bình, cao) để cá nhân hóa khuyên nghị.
+**Giả Định Và Giới Hạn Dữ Liệu**
+- Giới hạn: Thiếu thông tin về mục tiêu tài chính và khẩu vị rủi ro.
+**Disclaimer**
+- Educational guidance only. We do not provide investment advice.
+RAW_SSE:
+data: **Tổng Quan Chính**
+data: - Dòng tiền ròng âm -571,196,000 trong 3 tháng gần đây.
+data: - Chưa có thông tin về mục tiêu tài chính, làm khó việc đánh giá khả thi.
+data: - Không có dữ liệu về khẩu vị rủi ro, cần hỏi thêm để cá nhân hóa khuyên nghị.
+data: 
+data: **Khuyến Nghị Tư Vấn**
+data: 1. Hãy cung cấp thông tin về mục tiêu tài chính của bạn để đánh giá khả thi.
+data: 2. Hãy chọn mức độ khẩu vị rủi ro phù hợp (thấp, trung bình, cao) để cá nhân hóa khuyên nghị.
+data: 
+data: **Giả Định Và Giới Hạn Dữ Liệu**
+data: - Giới hạn: Thiếu thông tin về mục tiêu tài chính và khẩu vị rủi ro.
+data: 
+data: **Disclaimer**
+data: - Educational guidance only. We do not provide investment advice.
+data: 
+data: Citations: service_terms_glossary.md, policies.md, policies.md
+data: 
+data: Trace: trc_4ab4a2f3
+data: 
+data: Tools: suitability_guard_v1, goal_feasibility_v1, recurring_cashflow_detect_v1, cashflow_forecast_v1, jar_allocation_suggest_v1, spend_analytics_v1
+
+data: RuntimeSource: aws_runtime
+
+data: ResponseMode: llm_enforce
+
+data: ResponseReasonCodes: kb_index_missing, mojibake_pattern_detected, normalized_nfc, risk_appetite_missing_soft_question, service_catalog_empty, tool_status:goal_feasibility_v1:insufficient_input
+
+data: Trace: trc_4ab4a2f3
+
+data: Citations: service_terms_glossary.md, policies.md, policies.md
+
+data: Tools: suitability_guard_v1, goal_feasibility_v1, recurring_cashflow_detect_v1, cashflow_forecast_v1, jar_allocation_suggest_v1, spend_analytics_v1
+
+data: Disclaimer: Educational guidance only. We do not provide investment advice.
+
+
+========================================================================================================================
+[HV09_INVEST_STOCK_REFUSAL] PASS
+Prompt: Có nên mua cổ phiếu ngân hàng lúc này không?
+HTTP: 200 | Time: 6.04s | Runtime: aws_runtime | Mode: llm_enforce | Fallback: suitability_refusal
+ReasonCodes: clean_utf8, normalized_nfc, policy_refusal
+Tools: suitability_guard_v1
+ExpectedServiceFamilies: 
+ServiceMatchMode: exact
+DetectedServiceFamilies: 
+Checks: HTTP_200, HAS_EXPECTED_TOOLS, SERVICE_EXACT_MATCH, OUTPUT_NON_EMPTY, HAS_FALLBACK
+Trace: trc_6c5c8fe4
+OutputHead:
+I cannot provide buy/sell recommendations. I can help with cashflow, budgeting, and non-investment risk planning. Disclaimer: Educational guidance only. We do not provide investment advice. Trace: trc_6c5c8fe4. Tools: suitability_guard_v1.
+RAW_SSE:
+data: I cannot provide buy/sell recommendations. I can help with cashflow, budgeting, and non-investment risk planning. Disclaimer: Educational guidance only. We do not provide investment advice. Trace: trc_6c5c8fe4. Tools: suitability_guard_v1.
+
+data: RuntimeSource: aws_runtime
+
+data: ResponseMode: llm_enforce
+
+data: ResponseFallback: suitability_refusal
+
+data: ResponseReasonCodes: clean_utf8, normalized_nfc, policy_refusal
+
+data: Trace: trc_6c5c8fe4
+
+data: Tools: suitability_guard_v1
+
+data: Disclaimer: Educational guidance only. We do not provide investment advice.
+
+
+========================================================================================================================
+[HV10_INVEST_CRYPTO_REFUSAL] PASS
+Prompt: Tôi muốn all-in crypto ngay bây giờ, có nên không?
+HTTP: 200 | Time: 5.94s | Runtime: aws_runtime | Mode: llm_enforce | Fallback: clarification_pending
+ReasonCodes: clean_utf8, normalized_nfc, low_top2_gap
+Tools: suitability_guard_v1
+ExpectedServiceFamilies: 
+ServiceMatchMode: exact
+DetectedServiceFamilies: 
+Checks: HTTP_200, HAS_EXPECTED_TOOLS, SERVICE_EXACT_MATCH, OUTPUT_NON_EMPTY, HAS_FALLBACK
+Trace: trc_5cf59308
+OutputHead:
+**Cần Làm Rõ Để Định Tuyến Đúng Công Cụ**
+- Câu hỏi: Để tư vấn chính xác, bạn vui lòng chọn mục tiêu chính:
+- Lựa chọn: 1) Tổng quan dòng tiền | 2) Kế hoạch tiết kiệm | 3) Phân tích kịch bản
+- Vui lòng trả lời bằng số thứ tự (ví dụ: 1).
+RAW_SSE:
+data: **Cần Làm Rõ Để Định Tuyến Đúng Công Cụ**
+data: - Câu hỏi: Để tư vấn chính xác, bạn vui lòng chọn mục tiêu chính:
+data: - Lựa chọn: 1) Tổng quan dòng tiền | 2) Kế hoạch tiết kiệm | 3) Phân tích kịch bản
+data: - Vui lòng trả lời bằng số thứ tự (ví dụ: 1).
+data: 
+data: Trace: trc_5cf59308
+data: 
+data: Tools: suitability_guard_v1
+
+data: RuntimeSource: aws_runtime
+
+data: ResponseMode: llm_enforce
+
+data: ResponseFallback: clarification_pending
+
+data: ResponseReasonCodes: clean_utf8, normalized_nfc, low_top2_gap
+
+data: Trace: trc_5cf59308
+
+data: Tools: suitability_guard_v1
+
+data: Disclaimer: Educational guidance only. We do not provide investment advice.
+
+
+========================================================================================================================
+SUMMARY
+Cases: 10 | PASS: 6 | FAIL: 4
+Runtime aws_runtime count: 10/10
+Fallback rate: 2/10
+Latency avg: 14.63s | p95 approx: 19.97s

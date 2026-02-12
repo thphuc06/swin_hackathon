@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import logging
@@ -161,49 +162,107 @@ def _load_kb_files() -> Dict[str, Dict[str, Any]]:
     if kb_dir is None:
         logger.warning("KB directory not found (checked KB_DIR, repo/kb, app/kb, cwd/kb)")
         return {}
-    
-    kb_content = {}
-    kb_files = [
-        "policies.md",
-        "advisory_playbook_banking_services.md",
-        "services_savings_and_deposits.md",
-        "services_loans_and_credit.md",
-        "services_cards_and_payments.md",
-        "service_terms_glossary.md",
-        "disclaimers.md",
-    ]
-    
-    for filename in kb_files:
-        file_path = kb_dir / filename
-        if not file_path.exists():
-            logger.warning("KB file not found: %s", filename)
-            continue
-        
+
+    def _split_csv_field(raw: str) -> list[str]:
+        text = str(raw or "").strip()
+        if not text:
+            return []
+        return [token.strip().lower() for token in re.split(r"[|,;]", text) if token.strip()]
+
+    index_rows: list[Dict[str, str]] = []
+    index_path = kb_dir / "kb_index.csv"
+    if index_path.exists():
         try:
-            content = file_path.read_text(encoding="utf-8")
-            sections = _parse_markdown_sections(content, filename)
-            
-            # Determine doc_type from filename
-            doc_type = "policy"
-            if "playbook" in filename:
-                doc_type = "playbook"
-            elif "services_" in filename:
-                doc_type = "service"
-            elif "glossary" in filename:
-                doc_type = "glossary"
-            elif "disclaimer" in filename:
-                doc_type = "disclaimer"
-            
-            kb_content[filename] = {
-                "content": content,
-                "sections": sections,
-                "doc_type": doc_type,
-                "filename": filename,
-            }
-            logger.info("Loaded KB file: %s (%d chars, %d sections)", filename, len(content), len(sections))
+            with index_path.open("r", encoding="utf-8-sig", newline="") as file:
+                reader = csv.DictReader(file)
+                for row in reader:
+                    normalized: Dict[str, str] = {}
+                    for key, value in row.items():
+                        key_norm = str(key or "").strip()
+                        if not key_norm:
+                            continue
+                        normalized[key_norm] = str(value or "").strip()
+                    if normalized:
+                        index_rows.append(normalized)
         except Exception as exc:
-            logger.error("Failed to load KB file %s: %s", filename, exc)
-    
+            logger.error("Failed to read kb_index.csv: %s", exc)
+
+    kb_content: Dict[str, Dict[str, Any]] = {}
+    if index_rows:
+        for row in index_rows:
+            status = str(row.get("status") or "active").strip().lower() or "active"
+            if status in {"inactive", "disabled", "deprecated"}:
+                continue
+            doc_type = str(row.get("doc_type") or "").strip().lower()
+            doc_path = str(row.get("doc_path") or "").strip()
+            if not doc_path:
+                legacy_name = str(row.get("name") or "").strip()
+                if legacy_name:
+                    doc_path = f"{legacy_name}.md"
+            if not doc_path:
+                continue
+
+            file_path = (kb_dir / doc_path).resolve()
+            filename = file_path.name
+            if not file_path.exists():
+                logger.warning("KB file missing from index: %s", doc_path)
+                continue
+            if filename in kb_content:
+                continue
+
+            try:
+                content = file_path.read_text(encoding="utf-8")
+                sections = _parse_markdown_sections(content, filename)
+                intents = _split_csv_field(row.get("intents_csv", ""))
+                kb_content[filename] = {
+                    "content": content,
+                    "sections": sections,
+                    "doc_type": doc_type or "policy",
+                    "filename": filename,
+                    "metadata": {
+                        "name": str(row.get("name") or "").strip(),
+                        "status": status,
+                        "intents": intents,
+                        "summary": str(row.get("summary") or "").strip(),
+                        "doc_path": doc_path.replace("\\", "/"),
+                    },
+                }
+                logger.info(
+                    "Loaded KB file from index: %s (%d chars, %d sections)",
+                    filename,
+                    len(content),
+                    len(sections),
+                )
+            except Exception as exc:
+                logger.error("Failed to load KB file %s: %s", doc_path, exc)
+
+    if not kb_content:
+        # Backward-compatible fallback when index is missing or invalid.
+        for file_path in sorted(kb_dir.glob("*.md")):
+            filename = file_path.name
+            try:
+                content = file_path.read_text(encoding="utf-8")
+                sections = _parse_markdown_sections(content, filename)
+                doc_type = "policy"
+                if "playbook" in filename:
+                    doc_type = "playbook"
+                elif "services_" in filename:
+                    doc_type = "service"
+                elif "glossary" in filename:
+                    doc_type = "glossary"
+                elif "disclaimer" in filename:
+                    doc_type = "disclaimer"
+                kb_content[filename] = {
+                    "content": content,
+                    "sections": sections,
+                    "doc_type": doc_type,
+                    "filename": filename,
+                    "metadata": {"name": filename.replace(".md", ""), "status": "active", "intents": []},
+                }
+                logger.info("Loaded KB file (fallback): %s (%d chars, %d sections)", filename, len(content), len(sections))
+            except Exception as exc:
+                logger.error("Failed to load KB file %s: %s", filename, exc)
+
     return kb_content
 
 
@@ -251,18 +310,24 @@ def _match_kb_content_local(query: str, intent: str, filters: Dict[str, str]) ->
             "note": "KB not loaded"
         }
     
-    # Intent-based document selection
+    # Intent-based document selection, dynamic from kb_index metadata.
     intent_key = intent.lower().strip()
-    intent_doc_mapping = {
-        "summary": ["services_savings_and_deposits.md", "services_cards_and_payments.md", "service_terms_glossary.md", "policies.md"],
-        "risk": ["services_loans_and_credit.md", "services_savings_and_deposits.md", "advisory_playbook_banking_services.md", "policies.md"],
-        "planning": ["services_savings_and_deposits.md", "services_loans_and_credit.md", "advisory_playbook_banking_services.md", "policies.md"],
-        "scenario": ["advisory_playbook_banking_services.md", "services_cards_and_payments.md", "services_savings_and_deposits.md", "policies.md"],
-        "invest": ["policies.md", "disclaimers.md", "service_terms_glossary.md"],
-    }
-    
-    # Get relevant documents for this intent
-    relevant_docs = intent_doc_mapping.get(intent_key, list(_KB_CONTENT.keys()))
+    relevant_docs: list[str] = []
+    for filename, doc in _KB_CONTENT.items():
+        metadata = doc.get("metadata") if isinstance(doc, dict) else {}
+        intents = metadata.get("intents") if isinstance(metadata, dict) else []
+        doc_type = str(doc.get("doc_type") or "").strip().lower() if isinstance(doc, dict) else ""
+        if not intent_key:
+            relevant_docs.append(filename)
+            continue
+        if isinstance(intents, list) and intent_key in [str(item).strip().lower() for item in intents if str(item).strip()]:
+            relevant_docs.append(filename)
+            continue
+        # Policy and glossary docs can assist phrasing/citations for all intents.
+        if doc_type in {"policy", "glossary", "disclaimer"}:
+            relevant_docs.append(filename)
+    if not relevant_docs:
+        relevant_docs = list(_KB_CONTENT.keys())
     
     # Extract keywords from query (simple tokenization)
     query_lower = query.lower()

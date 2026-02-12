@@ -9,17 +9,39 @@ from fastapi import Header, HTTPException, status
 from jose import jwt
 
 
+def _get_env(name: str, default: str = "") -> str:
+    value = os.getenv(name)
+    if value is not None:
+        return str(value)
+    # Defensive fallback for BOM-prefixed key names in malformed .env files.
+    bom_value = os.getenv(f"\ufeff{name}")
+    if bom_value is not None:
+        return str(bom_value)
+    return default
+
+
+def _resolve_region(user_pool_id: str) -> str:
+    region = _get_env("AWS_REGION", "").strip()
+    if region:
+        return region
+    if "_" in user_pool_id:
+        prefix = user_pool_id.split("_", 1)[0].strip()
+        if prefix:
+            return prefix
+    return "us-east-1"
+
+
 class CognitoSettings:
     def __init__(self) -> None:
-        self.user_pool_id = os.getenv("COGNITO_USER_POOL_ID", "")
-        self.client_id = os.getenv("COGNITO_CLIENT_ID", "")
-        self.region = os.getenv("AWS_REGION", "us-west-2")
+        self.user_pool_id = _get_env("COGNITO_USER_POOL_ID", "").strip()
+        self.client_id = _get_env("COGNITO_CLIENT_ID", "").strip()
+        self.region = _resolve_region(self.user_pool_id)
         self.issuer = (
             f"https://cognito-idp.{self.region}.amazonaws.com/{self.user_pool_id}"
             if self.user_pool_id
             else ""
         )
-        self.dev_bypass = os.getenv("DEV_BYPASS_AUTH", "false").lower() == "true"
+        self.dev_bypass = _get_env("DEV_BYPASS_AUTH", "false").lower() == "true"
 
 
 @lru_cache

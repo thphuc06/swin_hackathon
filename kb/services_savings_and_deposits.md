@@ -1,3 +1,10 @@
+---
+service_id: svc_savings_deposit
+family: savings_deposit
+requires_disclosure: true
+disclosure_refs: disclaimers.md#education-only
+---
+
 # Banking Services - Savings And Deposits
 
 ## Scope
@@ -52,4 +59,3 @@ It is product-category guidance only, not product recommendation.
 - Do not state exact rates unless retrieved from validated source.
 - Do not compare specific bank products without current pricing data.
 - Keep language educational and user-first.
-

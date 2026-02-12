@@ -135,7 +135,7 @@ def _build_prompt(
         "- Never output malformed or pseudo-Vietnamese spellings (for example 'thiềt tân', 'dềch vụ', 'têng tốc').\n"
         "- If you produce a malformed Vietnamese phrase, rewrite it to standard Vietnamese before final JSON.\n"
         "- If generated metric wording conflicts with fact semantics, rewrite wording to match fact meaning.\n"
-        "When facts include kb.service_category.*, include at least one practical banking service suggestion in actions.\n"
+        "When facts include service.match.* or kb.service_category.*, include at least one practical banking service suggestion in actions.\n"
         "Map service suggestion to context: savings_capacity -> savings/deposit; goal_gap or negative cashflow -> loan/credit support; spend anomaly -> card/payment control.\n"
         "If any fact with prefix anomaly.latest_change_point. exists and context is risk/anomaly (or user asks anomaly date/time), include it explicitly in summary_lines and key_metrics.\n"
         "If facts include anomaly.flag_reason.* and context is risk/anomaly, explicitly explain one or two top anomaly reasons in summary_lines.\n"
