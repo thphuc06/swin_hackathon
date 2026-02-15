@@ -10,6 +10,14 @@ System restatement (5-7 bullets)
 - Guardrails for PII/prompt attacks + audit trail (trace_id, tool calls, decisions).
 - Runtime cannot call localhost; tool endpoints must be public or behind Gateway.
 
+Problem & scope focus (report alignment)
+- Problem: retail users need monthly financial plans (caps + contributions), not only transaction categorization and static summaries.
+- Current gap: jars are operational tags in transfer UX; thresholds exist, but planner-grade monthly targets and 3-option trade-offs are not yet fully productized.
+- Who is affected: mass retail users (planning confidence), platform teams (retention/cost-to-serve), compliance (explainability/audit quality).
+- Why now: rising cost pressure + AI expectations + stricter transparency requirements.
+- In-scope MVP: monthly jar targets, risk-aware 3 options, apply flow to budgets/goals, proactive deviation alerts, suitability+best-interest gates.
+- Out-of-scope MVP: trading execution and short-term market timing advice.
+
 Layer choices (refactor)
 | Layer | Choice | Why it fits fintech | Responsibility |
 | --- | --- | --- | --- |
@@ -31,6 +39,7 @@ Layer choices (refactor)
 | Forecasting | Darts (ExponentialSmoothing) + statsmodels | Deterministic, auditable time series | Cashflow projection, runway estimates |
 | Safety | Bedrock Guardrails | PII/prompt attacks | Input/output filters + disclaimers |
 | Observability | CloudWatch + AgentCore OTel | Trace + replay for audit | Logs/metrics/traces |
+| Experimentation + KPI | AppConfig Feature Flags + EventBridge + Firehose + S3 + Athena + QuickSight | Measure impact safely in fintech | Variant assignment, event logging, KPI dashboards |
 | IaC | Terraform/CDK (minimal) | Clear path to production | Repeatable deploy (gateway/runtime/roles) |
 
 RAG KB notes
@@ -62,11 +71,17 @@ Current implementation snapshot (Tier2 agent, as-built)
   - `scenario` -> what-if scenario
   - `invest` -> suitability guard + risk profile (education-only)
   - `out_of_scope` -> suitability guard
+- Planned global policy gates (next): `suitability_guard_v1` + `best_interest_guard_v1` + `data_sufficiency_score_v1` before final rendering/write actions.
 - Response generation is LLM-grounded:
   - `facts -> advisory_context (insights/actions) -> answer_plan_v2 -> grounding validator -> renderer`
   - renderer binds placeholders `[F:fact_id]` to verified facts.
 - In `RESPONSE_MODE=llm_enforce`, fallback is `facts_only_compact_renderer`; legacy intent templates are not used for normal enforce responses.
 - Audit payload now includes `routing_meta`, `response_meta`, `evidence_pack`, `advisory_context`, `answer_plan_v2`.
+
+Current product gap (report alignment)
+- Jars in UX are still primarily tagging/categorization anchors in transfer flow; they are not yet a first-class monthly planning contract.
+- `jar_allocation_suggest_v1` provides split guidance from spending profile, but this is not equivalent to explicit monthly jar caps/contribution targets in absolute VND.
+- Data model already has `jars.target_amount` and `budgets(period, limit_amount, scope_*)`, but current described flow is still threshold/alert-centric, not a full planner loop with 3-option trade-offs and one-click plan apply.
 
 A) Implementation blueprint (MVP)
 
@@ -78,7 +93,7 @@ Related docs
 - `src/aws-kb-retrieval-server/README.md` (MCP server)
 
 Repo structure + responsibilities
-- frontend/: Next.js + Tailwind, minimal UI, streaming chat, show citations/disclaimer/trace.
+- frontend/: Next.js + Tailwind, minimal UI, streaming chat, monthly plan screen (3-option apply), show citations/disclaimer/trace.
 - backend/: FastAPI BFF, REST + /chat/stream proxy, JWT auth, EventBridge emit.
 - agent/: LangGraph + AgentCore Runtime entrypoint, tool adapters, guard logic.
 - src/aws-finance-mcp-server/: standalone Finance MCP service (JSON-RPC /mcp) for deterministic SQL-first advisory tools.
@@ -104,6 +119,8 @@ API endpoints (BFF)
 | GET | /budgets | list budgets | jar/category thresholds for Tier1 |
 | POST | /budgets | set budget | CTA: set/adjust thresholds |
 | POST | /goals | create/update goal | house goal |
+| POST | /planner/monthly-targets (planned) | generate monthly plan options | returns conservative/balanced/growth with caps+contributions |
+| POST | /planner/apply (planned) | apply selected plan option | persists to `/budgets` + `/goals` with trace_id |
 | GET | /risk-profile | current profile | versioned |
 | POST | /risk-profile | new version | immutable |
 | POST | /chat/stream | stream proxy to AgentCore | SSE |
@@ -135,12 +152,17 @@ Training & data plan: see `model_data_train.md`.
 | recurring_cashflow_detect_v1 | Finance MCP | tools/call | detect recurring/fixed costs + drift alerts |
 | goal_feasibility_v1 | Finance MCP | tools/call | evaluate savings goal feasibility + gap |
 | what_if_scenario_v1 | Finance MCP | tools/call | compare multiple scenario variants deterministically |
+| jar_targets_plan_v1 (planned) | Finance MCP | tools/call | build monthly jar caps + contributions across 3 options |
+| best_interest_guard_v1 (planned) | Finance MCP | tools/call | liquidity/affordability/risk-alignment/conflict checks with reason codes |
+| data_sufficiency_score_v1 (planned) | Finance MCP | tools/call | score data quality/completeness and gate recommendation depth |
+| tradeoff_plan_builder_v1 (planned) | Finance MCP | tools/call | generate conservative/balanced/growth options with ETA and risk trade-offs |
 
 Finance MCP tools currently implemented (`src/aws-finance-mcp-server`)
 - Core 6 tools: `spend_analytics_v1`, `anomaly_signals_v1`, `cashflow_forecast_v1`, `jar_allocation_suggest_v1`, `risk_profile_non_investment_v1`, `suitability_guard_v1`.
 - Extended 3 tools: `recurring_cashflow_detect_v1`, `goal_feasibility_v1`, `what_if_scenario_v1`.
 - All 9 tools return the same audit envelope: `trace_id`, `version`, `params_hash`, `sql_snapshot_ts`, `audit`.
 - **Anomaly detection stack**: River ADWIN (streaming drift), PyOD ECOD (outliers), Ruptures Pelt (change points - replaces Kats CUSUM due to dependency conflicts).
+- Planned next tools for report alignment: `jar_targets_plan_v1`, `best_interest_guard_v1`, `data_sufficiency_score_v1`, `tradeoff_plan_builder_v1`.
 
 DB schema (list, key fields)
 - users (id, email, created_at)
@@ -179,6 +201,7 @@ Tier1 pipeline spec
 - Worker A: aggregation update (txn_agg_daily)
 - Worker B: signals/forecast compute (runway/90d risk, discipline, missing data)
 - Worker C: triggers (rules/thresholds/anomaly) + format insight template + add disclaimer + write notification + audit
+- Planned extension: deviation monitor compares actual month-to-date vs applied monthly caps/contributions from `budgets`/`goals`.
 - UI inbox: list notifications sorted by created_at
 - User-facing UX: transfer flow is **manual jar pick**; optional `llm_categorize_tx` gives Top-K hint; low confidence -> user must choose.
 
@@ -204,6 +227,21 @@ Tier2 (LangGraph routing)
   - renderer (`Tom tat 3 dong`, `So lieu chinh`, `Khuyen nghi hanh dong`, `Gia dinh va han che`, `Disclaimer`)
 - In `llm_enforce`, fallback uses `facts_only_compact_renderer` when synthesis/validation fails.
 - Numbers shown to user must be grounded to tool facts; response metadata stores fallback/validation reason codes.
+
+Goal Planner + Monthly Jar Targets (planned MVP)
+- Purpose: convert jar guidance from "categorization/tagging" into a concrete monthly plan with persistable targets.
+- Monthly target types:
+  - spending caps: category/jar caps for monthly spending (`food`, `transport`, `entertainment`, etc.).
+  - contribution targets: monthly savings into goal jars (`emergency`, `house`, etc.).
+- Planner build path (Tier2):
+  1. read context: `spend_analytics_v1`, `recurring_cashflow_detect_v1`, `cashflow_forecast_v1`, `goal_feasibility_v1`, `what_if_scenario_v1`, `risk_profile_non_investment_v1`
+  2. generate 3 options (`conservative`, `balanced`, `growth`) with absolute VND caps/contributions
+  3. run gates: `suitability_guard_v1` + `best_interest_guard_v1` + `data_sufficiency_score_v1`
+  4. if approved by user, persist selected option to `budgets_get_set` (`period=month`, `scope_type=jar|category`) + `goals_get_set`
+  5. emit audit record with `trace_id`, option_id, applied targets, gate decision, reason_codes
+- Monitoring linkage (Tier1):
+  - Tier1 compares real spend/income vs applied monthly targets.
+  - Trigger deviation alerts and corrective CTAs when cap/contribution drift is detected.
 
 Tier2 runtime flags (current)
 - `ROUTER_MODE=rule|semantic_shadow|semantic_enforce`
@@ -238,6 +276,107 @@ Risk/Suitability guard
 - If intent = invest/buy/sell -> educational guidance only + refusal of advice.
 - Always add disclaimer + trace_id.
 
+Trade-off decision policy matrix (planned)
+
+The advisor returns exactly 3 options (`conservative`, `balanced`, `growth`) with explicit trade-offs on liquidity, goal ETA, and risk.
+
+| Plan profile | Entry conditions (dominant signals) | Allocation bias (example) | Expected trade-off |
+| --- | --- | --- | --- |
+| Conservative | runway `< 3` months OR volatility `>= 0.40` OR overspend `>= 0.35` | Essentials+Debt+Emergency `>= 75%`, Goals `15-20%`, Growth `0-5%` | Highest safety, slowest goal speed |
+| Balanced | runway `3-6` months AND volatility `0.20-0.40` AND overspend `0.15-0.35` | Essentials+Debt+Emergency `60-70%`, Goals `20-30%`, Growth `5-10%` | Middle path on safety vs progress |
+| Growth | runway `>= 6` months AND volatility `< 0.20` AND overspend `< 0.15` | Essentials+Debt+Emergency `50-60%`, Goals `25-35%`, Growth `10-20%` | Fastest goal speed, lower liquidity buffer |
+
+Selection rule (planned)
+- Use worst-signal-wins gating: if any high-risk signal fires, cap to `conservative`.
+- Never output only one plan for planning/scenario intents; always output 3 and explain trade-off.
+
+Trade-off 3 Options Output Contract (v1, planned)
+- For `planning` and `scenario` intents, response must include exactly 3 options: `conservative`, `balanced`, `growth`.
+- Output shape per option:
+
+```json
+{
+  "option_id": "conservative|balanced|growth",
+  "jar_caps": {
+    "food": 0,
+    "transport": 0,
+    "entertainment": 0
+  },
+  "jar_contributions": {
+    "emergency": 0,
+    "goal_house": 0
+  },
+  "goal_eta_days_or_months": 0,
+  "runway_days": 0,
+  "overspend_risk_flag": true,
+  "tradeoff_summary": "1-2 sentence summary of liquidity vs speed vs risk.",
+  "who_it_fits": "User profile that this option best matches.",
+  "actions_to_apply": [
+    {
+      "tool": "budgets_get_set|goals_get_set",
+      "payload_ref": "targets in this option"
+    }
+  ]
+}
+```
+
+Contract rules
+- Numeric values must be grounded by SQL/tool outputs (or explicitly marked as demo placeholders).
+- No invest execution actions in MVP; education-only remains enforced.
+- `Apply` writes monthly targets using `budgets_get_set` and goal contributions/horizon updates using `goals_get_set`.
+
+HITL approval matrix (planned)
+
+| Action | Risk level | Default mode | Threshold / trigger | Output |
+| --- | --- | --- | --- | --- |
+| Recategorize txn, set mapping rule, adjust budget <= 10% | Low | Auto | policy allow + data sufficiency >= 0.60 | Execute + log + undo CTA |
+| Jar reallocation > 15% OR monthly contribution delta > 20% | Medium | Confirm | user approval required | Confirm dialog + rationale |
+| Product/service recommendation (deposit/loan/card) | Medium-High | Confirm | disclosure + best-interest pass | Recommendation + approval |
+| Invest execution (`buy/sell/trade`) | High | Block | always blocked in MVP | Refusal + education-only |
+| Expand data consent / privacy-sensitive scope | High | Confirm | explicit consent | Consent prompt + scoped token |
+
+Best-interest + Data Sufficiency Gates (always-on, planned)
+
+Best-interest engine (planned, separate from suitability)
+
+Suitability answers "can this action be discussed/executed by policy?".  
+Best-interest answers "is this recommendation in user's interest now?".
+
+Deterministic rule set (planned)
+- `liquidity_first`: if emergency runway < 1 month, block growth plan and prioritize stabilization actions.
+- `affordability_cap`: if debt-service ratio > 0.40 or fixed-cost ratio > 0.60, block additional obligation suggestions.
+- `risk_alignment`: proposed plan risk must not exceed user risk appetite band.
+- `conflict_of_interest`: if sponsor/upsell path exists, force neutral alternatives and disclosure.
+- `data_sufficiency_gate`: disallow product recommendation when data sufficiency score < 0.60.
+
+Best-interest decision output (planned)
+- `decision`: `allow` | `allow_with_warning` | `deny`
+- `reason_codes`: `BI_LIQUIDITY_FAIL`, `BI_AFFORDABILITY_FAIL`, `BI_RISK_MISMATCH`, `BI_CONFLICT_FLAG`, `BI_DATA_LOW`
+- `next_action`: `auto` | `ask_confirm` | `clarify` | `refuse`
+
+Data sufficiency & confidence policy (planned)
+
+Score components (0..1)
+- coverage score: categorized transactions ratio, missing income sources, linked account coverage
+- recency score: freshness of last transaction/update
+- consistency score: volatility of labels and reconciliation mismatch
+- profile score: goal + risk profile completeness
+
+Gating policy (planned)
+- score `>= 0.75`: full advisory (3-option trade-off + quantified ETA)
+- score `0.60-0.74`: bounded advisory (no hard product push, assumptions explicit)
+- score `0.40-0.59`: clarify-first (1-2 questions), no write actions
+- score `< 0.40`: safe fallback only, request sync/profile completion
+
+New runtime flags (planned)
+- `TRADEOFF_POLICY_VERSION=v1`
+- `BEST_INTEREST_POLICY_VERSION=v1`
+- `HITL_MAJOR_REALLOC_PCT=0.15`
+- `HITL_GOAL_CONTRIB_DELTA_PCT=0.20`
+- `DATA_SUFFICIENCY_MIN=0.60`
+- `DATA_SUFFICIENCY_CLARIFY_MIN=0.40`
+- `BEST_INTEREST_ENABLED=true`
+
 Memory update
 - Store: summaries, preferences, goal metadata.
 - Never store: raw ledger rows, PII, full transaction details.
@@ -255,6 +394,13 @@ Prompt injection & PII
 - KB retrieval limited to doc_type=policy|template.
 - KB tool routed via Gateway so Policy/Cedar can allow/deny by doc_type and scope.
 
+Best-interest enforcement path (planned, AWS)
+- Add `best_interest_guard_v1` as deterministic MCP tool behind AgentCore Gateway.
+- Evaluate both `suitability_guard_v1` and `best_interest_guard_v1` before any recommendation write path.
+- Keep final allow/deny at AgentCore Policy/Cedar for deterministic governance.
+- Persist decision envelope to `audit_decision_log` with `policy_id`, `decision`, `reason_codes`, `trace_id`.
+- Version policies in S3 (`policy bundles`) and roll out via AppConfig for controlled release.
+
 Audit
 - trace_id per request.
 - log tool params hash + policy decision.
@@ -271,6 +417,37 @@ Post-hackathon
 - Deploy backend public (API Gateway/Lambda or ECS).
 - Move tools to Gateway/MCP + Policy/Cedar.
 - Enable Guardrails + Memory + Observability export.
+
+KPI + experiment plan (planned, AWS)
+
+Primary KPIs
+- `acceptance_rate_7d`: % recommendations accepted in 7 days.
+- `d30_retention`: % users active at day 30 after first advisory.
+- `overspend_incidents_30d`: count of overspend/shortfall events per user.
+- `complaint_or_override_rate`: % advice events with compliance override/complaint.
+- `cost_per_served_user`: infra + runtime cost / active advised users.
+
+AWS measurement stack
+- `AppConfig Feature Flags`: assign advisory policy variants (`control`, `tradeoff_v1`, `tradeoff_v1_best_interest`).
+- `EventBridge`: ingest product and model events (`advice_rendered`, `advice_accepted`, `approval_required`, `policy_denied`).
+- `Kinesis Firehose -> S3`: append-only analytics log stream.
+- `Glue + Athena`: daily KPI aggregation jobs.
+- `QuickSight`: KPI dashboards by cohort/segment/risk band.
+
+Minimal event schema (for all KPI events)
+- required fields: `event_name`, `event_ts`, `user_id_hash`, `trace_id`, `variant_id`, `intent`, `plan_profile`, `decision`, `reason_codes`, `latency_ms`.
+
+Pilot design
+- offline eval: replay benchmark prompts + synthetic transaction cohorts.
+- pilot A/B: 2-4 week run with guardrail rollback threshold.
+- rollback triggers: complaint rate spike, policy deny spike, or latency SLA breach.
+
+Demo story (hackathon, 5 steps)
+1. Money Inbox ingests transactions and updates SQL truth views.
+2. User opens Monthly Plan and receives 3 options (`conservative`, `balanced`, `growth`) with caps, contributions, ETA, and runway.
+3. Copilot runs suitability + best-interest + data sufficiency gates and explains reason codes.
+4. User clicks `Apply` on one option; system persists plan to `/budgets` + `/goals` and logs `trace_id`.
+5. Tier1 monitors deviation against applied targets and pushes proactive alerts with corrective CTA + audit trace.
 
 Day-by-day checklist
 
@@ -290,6 +467,11 @@ Day 3 (stretch)
 - Guardrails config + Memory summaries.
 - Public backend endpoint (replace mock).
 
+Day 4 (alignment hardening)
+- Add `best_interest_guard_v1` + `data_sufficiency_score_v1` with reason codes.
+- Add trade-off policy matrix (`conservative`/`balanced`/`growth`) and HITL thresholds.
+- Emit KPI events to EventBridge/Firehose and publish first QuickSight dashboard.
+
 E) Architecture diagrams (future state)
 
 1) Tier routing (Tier1 vs Tier2)
@@ -303,7 +485,7 @@ flowchart TB
   IN["Input arrives"] --> SRC{"What triggered it?"}
 
   %% Tier1: proactive
-  SRC -->|User transfer (UI)| T1["Tier1 (Proactive)<br/>Event-driven pipeline<br/>Jar picked manually; LLM hint optional"]
+  SRC -->|"User transfer (UI)"| T1["Tier1 (Proactive)<br/>Event-driven pipeline<br/>Jar picked manually; LLM hint optional"]
   T1 --> T1A["Read truth from SQL/views<br/>+ compute signals/forecast (90d)"]
   T1A --> T1B{"Any rule/threshold/anomaly triggered?"}
   T1B -->|Yes| N1["Output: Notification/Inbox insight<br/>+ CTA (fix mapping / set budget)"]
@@ -315,7 +497,10 @@ flowchart TB
   T2 --> R0["Intent router (cheap)<br/>choose minimal tools"]
   R0 --> R1["Read-only tools first:<br/>signals_read -> cashflow_forecast_90d -> sql_read_views<br/>(+ transactions_list if needed)"]
   R1 --> R2["KB (optional): policy/template phrasing<br/>with citations"]
-  R2 --> OUT["Output: Advice/explanation<br/>disclaimer + trace_id"]
+  R2 --> GATE["Policy gates:<br/>suitability + best-interest + confidence"]
+  GATE --> HITL{"Need approval?"}
+  HITL -->|No| OUT["Output: Advice/explanation<br/>disclaimer + trace_id"]
+  HITL -->|Yes| OUT2["Output: Ask confirmation<br/>then proceed"]
 
   %% Cross-link: explain a Tier1 insight
   N1 -. user taps Explain .-> T2
@@ -334,7 +519,7 @@ flowchart TB
   end
 
   subgraph API
-    APIGW[API Gateway (AWS)]
+    APIGW["API Gateway (AWS)"]
     BFF["Backend BFF (Lambda/ECS/App Runner)<br/>CRUD + Chat Proxy + AuthZ"]
   end
 
@@ -345,7 +530,7 @@ flowchart TB
   end
 
   subgraph Tier1["Tier1 Push Pipeline (Event-driven)"]
-    EB[EventBridge (AWS)]
+    EB["EventBridge (AWS)"]
     Q["SQS (buffer)"]
     W1["Aggregation Worker (Lambda/ECS)<br/>update aggregates"]
     W2["Trigger/Template Worker (Lambda/ECS)<br/>rules -> insight draft"]
@@ -398,7 +583,7 @@ flowchart TB
   %% RAG
   S3DOC --> KB --> VEC
   RT -->|Retrieve / RAG| KB
-  RT -->|LLM (Bedrock)| LLM
+  RT -->|"LLM (Bedrock)"| LLM
 
   %% Observability
   RT --> CW
@@ -440,8 +625,11 @@ flowchart LR
   MEM --> REASON
   CIT --> REASON
 
-  REASON --> SAFE["Guardrails + Suitability Gate<br/>disclaimer + boundaries"]
-  SAFE --> RESP["Response<br/>assumptions + what-if + citations"]
+  REASON --> SAFE["Guardrails + Suitability + Best-interest + Confidence Gate<br/>disclaimer + reason_codes + boundaries"]
+  SAFE --> HITL{"Need user approval?"}
+  HITL -->|No| RESP["Response<br/>assumptions + what-if + citations"]
+  HITL -->|Yes| CONF["Ask approval<br/>(major reallocation/product/privacy)"]
+  CONF --> RESP
   RESP --> AUD["Audit logs<br/>(trace + decision + kb refs)"]
 ```
 
@@ -582,6 +770,22 @@ sequenceDiagram
     RT-->>API: response + citations + trace_id
     API-->>UI: SSE tokens
   end
+
+  opt User opens Monthly Plan and clicks Apply on one option
+    UI->>API: POST /planner/monthly-targets
+    API->>RT: invoke planner route
+    RT->>GW: tools/call spend_analytics_v1 + recurring_cashflow_detect_v1 + cashflow_forecast_v1 + goal_feasibility_v1 + what_if_scenario_v1
+    RT->>GW: tools/call best_interest_guard_v1 + data_sufficiency_score_v1 + suitability_guard_v1
+    RT-->>API: 3 options + gate decisions + trace_id
+    API-->>UI: show conservative/balanced/growth options
+    UI->>API: POST /planner/apply (selected option_id)
+    API->>GW: tools/call budgets_get_set + goals_get_set
+    GW->>POL: evaluate write permissions
+    POL-->>GW: ALLOW
+    API->>PG: persist monthly caps/contributions
+    API->>PG: write audit_decision_log (trace_id, option_id, reason_codes)
+    API-->>UI: applied + monitoring enabled
+  end
 ```
 
 5) Tier2 Agent (LangGraph on AgentCore Runtime)
@@ -621,6 +825,7 @@ Tool selection is not "LLM magic". The orchestrator must follow deterministic ru
 - read-only tools first (signals/forecast/views)
 - KB only for approved phrasing/policy (citations mandatory)
 - write tools only after explicit user confirmation (and policy allow)
+- always run deterministic policy gates before final advice: suitability, best-interest, and data sufficiency
 
 ```mermaid
 flowchart TD
@@ -631,10 +836,11 @@ flowchart TD
   IR -->|if needs examples| TX["Tool: transactions_list<br/>(filtered, minimal)"]
   IR -->|if policy/phrasing| KB["Tool: kb_retrieve<br/>(doc_type allowlist + citations)"]
   IR -->|if what-if compute| CI["Tool: code_interpreter_run"]
+  IR -->|if planning intent| PL["Tool: jar_targets_plan_v1<br/>(3 options with monthly caps/contributions)"]
 
   IR -->|if user requests change| C{"Need write?"}
   C -->|yes| CONF["Ask user to confirm action<br/>(UI confirm or explicit text)"]
-  CONF --> W["Tool: rules_counterparty_set / budgets_get_set"]
+  CONF --> W["Tool: budgets_get_set / goals_get_set / rules_counterparty_set"]
 
   S0 --> PACK["Assemble Fact Pack<br/>(CTX + SIG + constraints)"]
   F0 --> PACK
@@ -642,9 +848,17 @@ flowchart TD
   TX --> PACK
   KB --> PACK
   CI --> PACK
+  PL --> PACK
   W --> PACK
 
-  PACK --> OUT["LLM: explain + recommend next action<br/>(no invented numbers)"]
+  PACK --> GATE["Policy gates<br/>suitability_guard_v1 + best_interest_guard_v1 + data_sufficiency_score_v1"]
+  GATE --> DEC{"Gate result"}
+  DEC -->|allow| OUT["LLM: explain + recommend next action<br/>(no invented numbers)"]
+  DEC -->|allow_with_warning| CL["Ask 1-2 clarifying questions<br/>return bounded recommendation"]
+  CL --> OUT
+  DEC -->|needs_approval| CONF
+  DEC -->|deny| SAFE["Refuse / safe fallback<br/>with reason codes"]
+  SAFE --> OUT
 ```
 
 Decision matrix (recommended MVP)
@@ -653,6 +867,7 @@ Decision matrix (recommended MVP)
 | "Am I at risk in next 3 months?" | `signals_read` -> `cashflow_forecast_90d` -> `sql_read_views` | `kb_retrieve` | none |
 | "Why was I flagged abnormal spend?" | `signals_read` -> `sql_read_views` -> `transactions_list` | `kb_retrieve` | `rules_counterparty_set` (only if user fixes mapping) |
 | "Set a threshold rule" | `signals_read` | `sql_read_views` | `budgets_get_set` (user confirms) |
+| "Build monthly plan and apply one option" | `spend_analytics_v1` -> `recurring_cashflow_detect_v1` -> `cashflow_forecast_v1` -> `goal_feasibility_v1` -> `what_if_scenario_v1` | `risk_profile_non_investment_v1`, `data_sufficiency_score_v1`, `best_interest_guard_v1` | `budgets_get_set` + `goals_get_set` (user confirms) |
 
 6) Tool governance layer (Gateway + Policy/Cedar + Audit)
 
@@ -669,6 +884,9 @@ flowchart TD
   P -->|ALLOW| T4["Tool: Tx Categorizer (Jar + Category)"]
   P -->|ALLOW| T5["Tool: Signals/Forecast (read-only)"]
   P -->|ALLOW| T6["Tool: Rules/Budgets (write)"]
+  P -->|ALLOW| T7["Tool: Best-interest Guard"]
+  P -->|ALLOW| T8["Tool: Data Sufficiency Scorer"]
+  P -->|ALLOW| T9["Tool: Jar Targets Planner"]
 
   P -->|DENY| D["Block + safe response<br/>(educate / escalate Tier2)"]
 
@@ -679,9 +897,18 @@ flowchart TD
   T4 --> L
   T5 --> L
   T6 --> L
+  T7 --> L
+  T8 --> L
+  T9 --> L
   D --> L
   L --> CW["CloudWatch + Audit Logs"]
 ```
+
+Policy bundles (planned)
+- `policy.suitability.v1`: invest/execution boundaries, education-only constraints.
+- `policy.best_interest.v1`: liquidity-first, affordability, risk alignment, conflict checks.
+- `policy.hitl.v1`: auto/confirm/block thresholds for write operations.
+- `policy.data_sufficiency.v1`: confidence thresholds and clarify/degrade behavior.
 
 7) Memory layer (short-term vs long-term) + "do not store ledger"
 
