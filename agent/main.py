@@ -7,6 +7,7 @@ from typing import Any, Dict
 from bedrock_agentcore import BedrockAgentCoreApp
 from dotenv import load_dotenv
 
+from infra.auth import get_auth_provider
 from graph import run_agent
 from tools import initialize_kb, initialize_tool_registry
 
@@ -78,21 +79,52 @@ def _resolve_user_token(payload: Dict[str, Any], context: Any | None) -> str:
     return os.getenv("DEFAULT_USER_TOKEN", "")
 
 
+def _resolve_session_id(payload: Dict[str, Any], context: Any | None, *, user_id: str) -> str:
+    payload_session = payload.get("session_id")
+    if isinstance(payload_session, str) and payload_session.strip():
+        return payload_session.strip()
+
+    request_headers = getattr(context, "request_headers", None) if context is not None else None
+    if isinstance(request_headers, dict):
+        for key, value in request_headers.items():
+            if str(key).lower() in {"x-session-id", "session-id"} and isinstance(value, str) and value.strip():
+                return value.strip()
+
+    request = getattr(context, "request", None) if context is not None else None
+    headers = getattr(request, "headers", None) if request is not None else None
+    if headers is not None:
+        value = headers.get("X-Session-Id") or headers.get("x-session-id") or headers.get("Session-Id")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    return f"{str(user_id or 'demo-user').strip()}:default"
+
+
 @app.entrypoint
 def invoke(payload: Dict[str, Any], context: Any | None = None) -> Dict[str, Any]:
     prompt = payload.get("prompt", "")
     user_token = _resolve_user_token(payload, context)
-    user_id = payload.get("user_id", "demo-user")
-    result = run_agent(prompt=prompt, user_token=user_token, user_id=user_id)
+    auth_result = get_auth_provider().verify(user_token if isinstance(user_token, str) else None)
+    user_id = payload.get("user_id", auth_result.subject or "demo-user")
+    session_id = _resolve_session_id(payload, context, user_id=str(user_id))
+    result = run_agent(prompt=prompt, user_token=user_token, user_id=user_id, session_id=session_id)
     response_meta = result.get("response_meta", {}) if isinstance(result.get("response_meta"), dict) else {}
     disclaimer = str(response_meta.get("disclaimer_effective") or DEFAULT_DISCLAIMER)
     return {
         "result": result["response"],
         "trace_id": result["trace_id"],
+        "request_id": result.get("request_id", ""),
+        "session_id": result.get("session_id", session_id),
         "citations": result["citations"].get("matches", []),
         "tool_calls": result.get("tool_calls", []),
+        "agent_outputs": result.get("agent_outputs", {}),
         "routing_meta": result.get("routing_meta", {}),
         "response_meta": response_meta,
+        "auth_meta": {
+            "authenticated": bool(auth_result.authenticated),
+            "subject": str(auth_result.subject or ""),
+            "reason": str(auth_result.reason or ""),
+        },
         "disclaimer": disclaimer,
     }
 

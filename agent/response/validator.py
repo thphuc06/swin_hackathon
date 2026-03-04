@@ -12,6 +12,7 @@ _INVESTMENT_EXECUTION_PATTERN = re.compile(
 _FACT_PLACEHOLDER_PATTERN = re.compile(r"\[F:([a-zA-Z0-9._-]+)\]")
 _NUMERIC_TOKEN_PATTERN = re.compile(r"[-+]?\d[\d,\.]*%?")
 _LIST_MARKER_PATTERN = re.compile(r"^\s*\d+[\.\)]\s+")
+_NUMERIC_CANONICAL_SCALE = 1_000_000
 
 
 def _extract_numeric_tokens(text: str) -> set[str]:
@@ -47,6 +48,24 @@ def _parse_numeric_token(token: str) -> float | None:
         return float(normalized)
     except ValueError:
         return None
+
+
+def _normalize_numeric_token_value(token: str) -> float | None:
+    """Normalize numeric token to a canonical ratio for grounding checks."""
+    value = _parse_numeric_token(token)
+    if value is None:
+        return None
+    text = str(token or "").strip()
+    if text.endswith("%"):
+        return value / 100.0
+    return value
+
+
+def _numeric_token_signature(token: str) -> int | None:
+    normalized_value = _normalize_numeric_token_value(token)
+    if normalized_value is None:
+        return None
+    return int(round(normalized_value * _NUMERIC_CANONICAL_SCALE))
 
 
 def _is_soft_ungrounded_token(token: str) -> bool:
@@ -152,7 +171,17 @@ def validate_answer_grounding(
             action_params_text = str(action.params)
         allowed_numeric_tokens.update(_extract_numeric_tokens(action_params_text))
 
-    ungrounded_numeric_tokens = sorted(raw_numeric_tokens.difference(allowed_numeric_tokens))
+    allowed_signatures = {
+        signature
+        for signature in (_numeric_token_signature(token) for token in allowed_numeric_tokens)
+        if signature is not None
+    }
+    ungrounded_numeric_tokens = sorted(
+        token
+        for token in raw_numeric_tokens
+        if token not in allowed_numeric_tokens
+        and _numeric_token_signature(token) not in allowed_signatures
+    )
     hard_ungrounded_tokens = [token for token in ungrounded_numeric_tokens if not _is_soft_ungrounded_token(token)]
     if hard_ungrounded_tokens:
         errors.append("ungrounded_numeric_tokens")

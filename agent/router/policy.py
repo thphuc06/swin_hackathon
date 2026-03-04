@@ -19,7 +19,11 @@ TOOL_BUNDLE_MAP: dict[IntentName, list[str]] = {
         "jar_allocation_suggest_v1",
     ],
     "scenario": ["what_if_scenario_v1"],
-    "invest": ["suitability_guard_v1", "risk_profile_non_investment_v1"],
+    "invest": [
+        "suitability_guard_v1",
+        "risk_profile_non_investment_v1",
+        "stock_agent_external_v1",
+    ],
     "out_of_scope": ["suitability_guard_v1"],
 }
 

@@ -22,3 +22,9 @@ current deployment flow.
 
 Use AgentCore Starter Toolkit from `agent/` for now, and configure Gateway
 targets separately (point to the MCP server `/mcp` endpoint).
+
+## Adapter Switching
+
+For local-first development and future AWS swap-in strategy, see:
+
+- `iac/ADAPTER_SWITCHING_GUIDE.md`

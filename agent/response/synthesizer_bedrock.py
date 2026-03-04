@@ -9,7 +9,14 @@ import boto3
 from botocore.config import Config
 from pydantic import ValidationError
 
-from config import AWS_REGION, BEDROCK_CONNECT_TIMEOUT, BEDROCK_MODEL_ID, BEDROCK_READ_TIMEOUT
+from config import (
+    AWS_REGION,
+    BEDROCK_CONNECT_TIMEOUT,
+    BEDROCK_GUARDRAIL_ID,
+    BEDROCK_GUARDRAIL_VERSION,
+    BEDROCK_MODEL_ID,
+    BEDROCK_READ_TIMEOUT,
+)
 
 from .contracts import AdvisoryContextV1, AnswerPlanV2
 from .schemas import validate_answer_plan_payload
@@ -22,6 +29,7 @@ _NON_FACT_PLACEHOLDER_PATTERN = re.compile(r"\[(?:A|I):[^\]]+\]")
 
 # Boto3 client cache with timeout config
 _bedrock_client = None
+_guardrail_warning_emitted = False
 
 def _get_bedrock_client():
     global _bedrock_client
@@ -239,11 +247,26 @@ def _load_json_candidate(text: str) -> Dict[str, Any] | None:
 def _invoke_bedrock_converse(prompt: str, *, model_id: str) -> str:
     client = _get_bedrock_client()
     logger.debug("Invoking Bedrock converse for answer synthesis (model=%s)", model_id)
-    response = client.converse(
-        modelId=model_id,
-        messages=[{"role": "user", "content": [{"text": prompt}]}],
-        inferenceConfig={"temperature": 0.0, "topP": 0.01, "maxTokens": 900},
-    )
+    request: Dict[str, Any] = {
+        "modelId": model_id,
+        "messages": [{"role": "user", "content": [{"text": prompt}]}],
+        "inferenceConfig": {"temperature": 0.0, "topP": 0.01, "maxTokens": 900},
+    }
+    guardrail_id = str(BEDROCK_GUARDRAIL_ID or "").strip()
+    guardrail_version = str(BEDROCK_GUARDRAIL_VERSION or "DRAFT").strip() or "DRAFT"
+    if guardrail_id:
+        request["guardrailConfig"] = {
+            "guardrailIdentifier": guardrail_id,
+            "guardrailVersion": guardrail_version,
+        }
+    else:
+        global _guardrail_warning_emitted
+        if not _guardrail_warning_emitted and str(BEDROCK_GUARDRAIL_VERSION or "").strip():
+            logger.warning(
+                "BEDROCK_GUARDRAIL_VERSION is set but BEDROCK_GUARDRAIL_ID is empty. Guardrail is disabled."
+            )
+            _guardrail_warning_emitted = True
+    response = client.converse(**request)
     return _extract_text_from_converse_payload(response)
 
 
@@ -1112,6 +1135,9 @@ def synthesize_answer_plan_with_bedrock(
     runtime_meta: Dict[str, Any] = {
         "prompt_version": PROMPT_VERSION,
         "attempts": retry_attempts + 1,
+        "guardrail_enabled": bool(str(BEDROCK_GUARDRAIL_ID or "").strip()),
+        "guardrail_id": str(BEDROCK_GUARDRAIL_ID or "").strip(),
+        "guardrail_version": str(BEDROCK_GUARDRAIL_VERSION or "DRAFT").strip() or "DRAFT",
         "raw_text": "",
     }
     _ = allowed_numeric_tokens

@@ -6,6 +6,8 @@ import json
 import logging
 import os
 import re
+import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict
@@ -16,17 +18,22 @@ from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 from tenacity import (
     retry,
+    retry_if_exception,
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
 )
 
+from core.errors import ToolTimeoutError, ToolUnavailableError, ValidationFailedError
 from config import (
     AGENTCORE_GATEWAY_ENDPOINT,
     AGENTCORE_GATEWAY_TOOL_NAME,
     BACKEND_API_BASE,
     BACKEND_TIMEOUT_SECONDS,
     BEDROCK_KB_ID,
+    GATEWAY_BREAKER_FAILURE_THRESHOLD,
+    GATEWAY_BREAKER_RESET_SECONDS,
+    GATEWAY_CIRCUIT_BREAKER_ENABLED,
     GATEWAY_TIMEOUT_SECONDS,
     HTTP_POOL_CONNECTIONS,
     HTTP_POOL_MAXSIZE,
@@ -47,6 +54,76 @@ _KB_INITIALIZED: bool = False
 # HTTP connection pooling (reduces SSL handshake overhead by ~2-3s per request)
 _gateway_session: requests.Session | None = None
 _backend_session: requests.Session | None = None
+
+# Gateway circuit breaker state (process-local).
+_gateway_breaker_lock = threading.Lock()
+_gateway_consecutive_failures = 0
+_gateway_breaker_opened_at = 0.0
+
+
+def _gateway_breaker_state() -> Dict[str, Any]:
+    with _gateway_breaker_lock:
+        return {
+            "enabled": bool(GATEWAY_CIRCUIT_BREAKER_ENABLED),
+            "consecutive_failures": int(_gateway_consecutive_failures),
+            "opened_at": float(_gateway_breaker_opened_at),
+            "threshold": int(GATEWAY_BREAKER_FAILURE_THRESHOLD),
+            "reset_seconds": int(GATEWAY_BREAKER_RESET_SECONDS),
+        }
+
+
+def _gateway_breaker_is_open() -> bool:
+    if not GATEWAY_CIRCUIT_BREAKER_ENABLED:
+        return False
+    with _gateway_breaker_lock:
+        global _gateway_consecutive_failures, _gateway_breaker_opened_at
+        if _gateway_consecutive_failures < GATEWAY_BREAKER_FAILURE_THRESHOLD:
+            return False
+        if _gateway_breaker_opened_at <= 0:
+            _gateway_breaker_opened_at = time.time()
+        elapsed = time.time() - _gateway_breaker_opened_at
+        if elapsed >= GATEWAY_BREAKER_RESET_SECONDS:
+            logger.info(
+                "Gateway circuit breaker reset after cooldown (elapsed=%.2fs).",
+                elapsed,
+            )
+            _gateway_consecutive_failures = 0
+            _gateway_breaker_opened_at = 0.0
+            return False
+        return True
+
+
+def _gateway_breaker_record_failure(reason: str) -> None:
+    if not GATEWAY_CIRCUIT_BREAKER_ENABLED:
+        return
+    with _gateway_breaker_lock:
+        global _gateway_consecutive_failures, _gateway_breaker_opened_at
+        _gateway_consecutive_failures += 1
+        if (
+            _gateway_consecutive_failures >= GATEWAY_BREAKER_FAILURE_THRESHOLD
+            and _gateway_breaker_opened_at <= 0
+        ):
+            _gateway_breaker_opened_at = time.time()
+            logger.warning(
+                "Gateway circuit breaker opened: failures=%d threshold=%d reason=%s",
+                _gateway_consecutive_failures,
+                GATEWAY_BREAKER_FAILURE_THRESHOLD,
+                reason,
+            )
+
+
+def _gateway_breaker_record_success() -> None:
+    if not GATEWAY_CIRCUIT_BREAKER_ENABLED:
+        return
+    with _gateway_breaker_lock:
+        global _gateway_consecutive_failures, _gateway_breaker_opened_at
+        if _gateway_consecutive_failures > 0 or _gateway_breaker_opened_at > 0:
+            logger.info(
+                "Gateway circuit breaker closed after successful call (previous_failures=%d).",
+                _gateway_consecutive_failures,
+            )
+        _gateway_consecutive_failures = 0
+        _gateway_breaker_opened_at = 0.0
 
 
 def _get_gateway_session() -> requests.Session:
@@ -103,6 +180,15 @@ def _get_backend_session() -> requests.Session:
 
 def _hash_payload(payload: Dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
+
+
+def _build_idempotency_key(base_name: str, arguments: Dict[str, Any], trace_id: str | None) -> str:
+    envelope = {
+        "tool": base_name,
+        "trace_id": str(trace_id or ""),
+        "args": arguments,
+    }
+    return hashlib.sha256(json.dumps(envelope, sort_keys=True, ensure_ascii=True).encode("utf-8")).hexdigest()[:32]
 
 
 def _is_local_backend() -> bool:
@@ -426,13 +512,27 @@ def _gateway_endpoint() -> str:
     )
 
 
+def _is_retryable_gateway_exception(exc: BaseException) -> bool:
+    if isinstance(exc, requests.exceptions.Timeout):
+        return True
+    if isinstance(exc, requests.exceptions.HTTPError):
+        status_code = exc.response.status_code if exc.response is not None else 0
+        return not (400 <= status_code < 500)
+    return isinstance(exc, requests.exceptions.RequestException)
+
+
 @retry(
-    retry=retry_if_exception_type((requests.exceptions.RequestException, requests.exceptions.Timeout)),
+    retry=retry_if_exception(_is_retryable_gateway_exception),
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=1, max=4),
     reraise=True,
 )
-def _gateway_jsonrpc(payload: Dict[str, Any], user_token: str, call_id: str | None = None) -> Dict[str, Any]:
+def _gateway_jsonrpc(
+    payload: Dict[str, Any],
+    user_token: str,
+    call_id: str | None = None,
+    extra_headers: Dict[str, str] | None = None,
+) -> Dict[str, Any]:
     """Call AgentCore Gateway with retry logic for transient errors.
     
     Retries up to 3 times with exponential backoff (1s, 2s, 4s) for:
@@ -447,21 +547,41 @@ def _gateway_jsonrpc(payload: Dict[str, Any], user_token: str, call_id: str | No
     if not endpoint:
         raise RuntimeError("AGENTCORE_GATEWAY_ENDPOINT not configured")
     
-    log_ctx = {"call_id": call_id or "unknown", "method": payload.get("method")}
+    if _gateway_breaker_is_open():
+        state = _gateway_breaker_state()
+        raise ToolUnavailableError(
+            "Gateway circuit breaker is open.",
+            metadata={
+                "reason": "gateway_circuit_open",
+                "call_id": call_id or "",
+                "method": str(payload.get("method") or ""),
+                "breaker_state": state,
+            },
+        )
     
     try:
         session = _get_gateway_session()
+        trace_id = payload.get("params", {}).get("arguments", {}).get("trace_id")
+        headers = _auth_headers(user_token)
+        if isinstance(extra_headers, dict):
+            headers.update({str(k): str(v) for k, v in extra_headers.items() if str(v).strip()})
+        if call_id:
+            headers["X-Call-Id"] = str(call_id)
+        if trace_id:
+            headers["X-Trace-Id"] = str(trace_id)
         response = session.post(
             endpoint,
             json=payload,
-            headers=_auth_headers(user_token),
+            headers=headers,
             timeout=GATEWAY_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
         data = response.json()
         if "error" in data:
             logger.warning("Gateway error: %s call_id=%s", data["error"], call_id)
+            _gateway_breaker_record_failure("jsonrpc_error")
             raise RuntimeError(f"Gateway tool error: {data['error']}")
+        _gateway_breaker_record_success()
         return data
     except requests.exceptions.HTTPError as exc:
         # Don't retry 4xx errors (client errors)
@@ -470,6 +590,15 @@ def _gateway_jsonrpc(payload: Dict[str, Any], user_token: str, call_id: str | No
             raise
         # Retry 5xx errors
         logger.warning("Gateway server error, will retry: %s call_id=%s", exc, call_id)
+        _gateway_breaker_record_failure("http_5xx_or_unknown")
+        raise
+    except requests.exceptions.Timeout as exc:
+        logger.warning("Gateway timeout, will retry: %s call_id=%s", exc, call_id)
+        _gateway_breaker_record_failure("timeout")
+        raise
+    except requests.exceptions.RequestException as exc:
+        logger.warning("Gateway request exception, will retry: %s call_id=%s", exc, call_id)
+        _gateway_breaker_record_failure("request_exception")
         raise
 
 
@@ -646,6 +775,66 @@ def _validate_tool_arguments(base_name: str, arguments: Dict[str, Any]) -> tuple
         return True, []  # Skip validation on unexpected errors
 
 
+def _map_gateway_exception(
+    exc: Exception,
+    *,
+    base_name: str,
+    call_id: str,
+    trace_id: str | None,
+) -> Exception:
+    if isinstance(exc, (ToolTimeoutError, ToolUnavailableError, ValidationFailedError)):
+        return exc
+
+    if isinstance(exc, requests.exceptions.Timeout):
+        return ToolTimeoutError(
+            f"Tool call timed out for {base_name}.",
+            metadata={"tool": base_name, "call_id": call_id, "trace_id": trace_id or ""},
+        )
+
+    if isinstance(exc, requests.exceptions.HTTPError):
+        status_code = exc.response.status_code if exc.response is not None else 0
+        detail = ""
+        if exc.response is not None and exc.response.text:
+            detail = exc.response.text[:300]
+        if 400 <= status_code < 500:
+            return ValidationFailedError(
+                f"Gateway rejected request for {base_name}.",
+                metadata={
+                    "tool": base_name,
+                    "call_id": call_id,
+                    "trace_id": trace_id or "",
+                    "status_code": status_code,
+                    "detail": detail,
+                },
+            )
+        return ToolUnavailableError(
+            f"Gateway unavailable for {base_name}.",
+            metadata={
+                "tool": base_name,
+                "call_id": call_id,
+                "trace_id": trace_id or "",
+                "status_code": status_code,
+                "detail": detail,
+            },
+        )
+
+    if isinstance(exc, requests.exceptions.RequestException):
+        return ToolUnavailableError(
+            f"Gateway request failed for {base_name}.",
+            metadata={
+                "tool": base_name,
+                "call_id": call_id,
+                "trace_id": trace_id or "",
+                "detail": str(exc),
+            },
+        )
+
+    return ToolUnavailableError(
+        f"Unexpected gateway failure for {base_name}.",
+        metadata={"tool": base_name, "call_id": call_id, "trace_id": trace_id or "", "detail": str(exc)},
+    )
+
+
 def _call_gateway_tool(
     base_name: str,
     arguments: Dict[str, Any],
@@ -687,6 +876,7 @@ def _call_gateway_tool(
         )
         raise ValueError(error_msg)
 
+    idempotency_key = _build_idempotency_key(base_name, sanitized_arguments, trace_id)
     payload = {
         "jsonrpc": "2.0",
         "id": call_id,
@@ -701,7 +891,18 @@ def _call_gateway_tool(
         trace_id,
     )
     
-    data = _gateway_jsonrpc(payload, user_token, call_id=call_id)
+    try:
+        data = _gateway_jsonrpc(
+            payload,
+            user_token,
+            call_id=call_id,
+            extra_headers={
+                "Idempotency-Key": idempotency_key,
+                "X-Trace-Id": str(trace_id or ""),
+            },
+        )
+    except Exception as exc:
+        raise _map_gateway_exception(exc, base_name=base_name, call_id=call_id, trace_id=trace_id) from exc
     result = data.get("result") or {}
     
     if bool(result.get("isError")):
@@ -720,10 +921,22 @@ def _call_gateway_tool(
             trace_id,
             detail,
         )
-        raise RuntimeError(f"Gateway tool error for {base_name}: {detail or 'unknown error'}")
+        raise ToolUnavailableError(
+            f"Gateway tool error for {base_name}: {detail or 'unknown error'}",
+            metadata={
+                "tool": base_name,
+                "call_id": call_id,
+                "trace_id": trace_id or "",
+                "idempotency_key": idempotency_key,
+            },
+        )
     
     content = result.get("content", [])
-    return _parse_tool_result_content(content)
+    parsed = _parse_tool_result_content(content)
+    if isinstance(parsed, dict):
+        parsed.setdefault("call_id", call_id)
+        parsed.setdefault("idempotency_key", idempotency_key)
+    return parsed
 
 
 def _mock_spend(range_days: str) -> Dict[str, Any]:

@@ -5,12 +5,30 @@ from datetime import datetime, timedelta, timezone
 import re
 import time
 import unicodedata
-import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError, as_completed
 from typing import Any, Dict, TypedDict
 
 from dotenv import load_dotenv
 from langgraph.graph import END, StateGraph
+
+from agents.stock_agent_client import get_stock_agent_client
+from core.errors import (
+    ExternalAgentUnavailableError,
+    ToolTimeoutError,
+    ToolUnavailableError,
+    ValidationFailedError,
+)
+from core.models import (
+    StockAdvisoryRequest,
+    StockConstraints,
+    StockContextSnapshot,
+    StockRiskProfile,
+)
+from core.settings import RETRIEVAL_ADAPTER
+from observability.audit_logger import emit_trace_event
+from observability.tracing import make_idempotency_key, new_request_id, new_trace_id
+from policy.engine import get_policy_engine
+from retrieval.factory import get_index_client
 
 from config import (
     ENCODING_FAILFAST_SCORE_MIN,
@@ -19,20 +37,29 @@ from config import (
     ENCODING_REPAIR_ENABLED,
     ENCODING_REPAIR_MIN_DELTA,
     ENCODING_REPAIR_SCORE_MIN,
+    DEGRADED_MODE_ENABLED,
     RESPONSE_MAX_RETRIES,
     RESPONSE_MODE,
     RESPONSE_POLICY_VERSION,
     RESPONSE_PROMPT_VERSION,
     RESPONSE_SCHEMA_VERSION,
+    ORCHESTRATOR_V2_ENABLED,
     ROUTER_INTENT_CONF_MIN,
     ROUTER_MAX_CLARIFY_QUESTIONS,
     ROUTER_MODE,
     ROUTER_POLICY_VERSION,
     ROUTER_SCENARIO_CONF_MIN,
     ROUTER_TOP2_GAP_MIN,
+    SESSION_MEMORY_ENABLED,
+    SESSION_MEMORY_MAX_TEXT_CHARS,
+    SESSION_MEMORY_MAX_TURNS,
+    SESSION_MEMORY_REDACT_KEYS,
+    SESSION_MEMORY_TTL_SECONDS,
+    STOCK_AGENT_EXTERNAL_ENABLED,
     TOOL_EXECUTION_TIMEOUT,
 )
 from encoding import apply_prompt_encoding_gate
+from memory.session_memory import load_session, save_session
 from router import (
     ClarifyingQuestionV1,
     RouteDecisionV1,
@@ -70,6 +97,9 @@ logger = logging.getLogger(__name__)
 class AgentState(TypedDict):
     user_token: str
     user_id: str
+    request_id: str
+    session_id: str
+    session_memory: Dict[str, Any]
     prompt: str
     intent: str
     scenario_request: Dict[str, Any]
@@ -88,12 +118,178 @@ class AgentState(TypedDict):
     answer_plan_v2: Dict[str, Any]
     response_meta: Dict[str, Any]
     tool_errors: Dict[str, Any]
+    selected_agent: str
+    agent_outputs: Dict[str, Any]
     response: str
     trace_id: str
 
 
 load_dotenv()
 DEFAULT_DISCLAIMER = "Educational guidance only. We do not provide investment advice."
+_SESSION_MEMORY_REDACT_KEYSET = {
+    token.strip().lower()
+    for token in str(SESSION_MEMORY_REDACT_KEYS or "").split(",")
+    if token.strip()
+}
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _truncate_text(value: Any, limit: int = SESSION_MEMORY_MAX_TEXT_CHARS) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}..."
+
+
+def _redact_memory_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        redacted: Dict[str, Any] = {}
+        for key, item in value.items():
+            key_text = str(key or "").strip()
+            key_norm = key_text.lower()
+            if key_norm in _SESSION_MEMORY_REDACT_KEYSET or key_norm.endswith("_token"):
+                redacted[key_text] = "[REDACTED]"
+                continue
+            redacted[key_text] = _redact_memory_value(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_memory_value(item) for item in value[: max(1, SESSION_MEMORY_MAX_TURNS * 2)]]
+    if isinstance(value, str):
+        return _truncate_text(value, limit=max(SESSION_MEMORY_MAX_TEXT_CHARS * 2, 120))
+    return value
+
+
+def _load_session_memory_into_state(state: AgentState) -> None:
+    state["session_memory"] = {}
+    if not SESSION_MEMORY_ENABLED:
+        return
+    session_id = str(state.get("session_id") or "").strip()
+    if not session_id:
+        return
+    try:
+        session_payload = load_session(session_id)
+    except Exception as exc:  # pragma: no cover - runtime path
+        logger.warning("session_memory_load_failed session=%s trace=%s error=%s", session_id, state.get("trace_id"), exc)
+        emit_trace_event(
+            trace_id=state.get("trace_id", ""),
+            stage="session_memory",
+            outcome="load_error",
+            payload={"session_id": session_id, "error": str(exc)},
+        )
+        return
+
+    if not isinstance(session_payload, dict):
+        return
+    state["session_memory"] = session_payload
+    if session_payload:
+        existing_meta = state.get("response_meta") if isinstance(state.get("response_meta"), dict) else {}
+        reason_codes = [str(code).strip() for code in existing_meta.get("reason_codes", []) if str(code).strip()]
+        reason_codes.append("session_memory_loaded")
+        state["response_meta"] = {
+            **existing_meta,
+            "reason_codes": sorted(set(reason_codes)),
+            "session_memory_loaded": True,
+            "session_id": session_id,
+        }
+        emit_trace_event(
+            trace_id=state.get("trace_id", ""),
+            stage="session_memory",
+            outcome="loaded",
+            payload={
+                "session_id": session_id,
+                "turn_count": len(session_payload.get("turns", [])) if isinstance(session_payload.get("turns"), list) else 0,
+            },
+        )
+
+
+def _augment_prompt_with_session_memory(prompt: str, session_memory: Dict[str, Any]) -> str:
+    if not SESSION_MEMORY_ENABLED:
+        return prompt
+    if not isinstance(session_memory, dict) or not session_memory:
+        return prompt
+    last_intent = str(session_memory.get("last_intent") or "").strip().lower()
+    last_risk = str(session_memory.get("last_risk_appetite") or "").strip().lower()
+    turns = session_memory.get("turns") if isinstance(session_memory.get("turns"), list) else []
+    latest_turn = turns[-1] if turns else {}
+    if not isinstance(latest_turn, dict):
+        latest_turn = {}
+    prev_prompt = _truncate_text(latest_turn.get("prompt"), limit=160)
+    prev_response = _truncate_text(latest_turn.get("response_preview"), limit=180)
+    context_lines: list[str] = []
+    if last_intent:
+        context_lines.append(f"last_intent={last_intent}")
+    if last_risk:
+        context_lines.append(f"last_risk_appetite={last_risk}")
+    if prev_prompt:
+        context_lines.append(f"last_prompt={prev_prompt}")
+    if prev_response:
+        context_lines.append(f"last_response={prev_response}")
+    if not context_lines:
+        return prompt
+    context_text = " | ".join(context_lines)
+    return f"[SESSION_CONTEXT] {context_text}\n[CURRENT_QUERY] {prompt}"
+
+
+def _tool_retry_count(tool_result: Dict[str, Any] | Exception | None) -> int:
+    if isinstance(tool_result, dict):
+        return max(0, _safe_int(tool_result.get("retry_count"), 0))
+    if isinstance(tool_result, Exception):
+        metadata = getattr(tool_result, "metadata", {})
+        if isinstance(metadata, dict):
+            return max(0, _safe_int(metadata.get("retry_count"), 0))
+    return 0
+
+
+def _emit_tool_trace_start(state: AgentState, tool_name: str, *, start_ts: str) -> None:
+    emit_trace_event(
+        trace_id=state.get("trace_id", ""),
+        stage="tool_call",
+        outcome="start",
+        payload={
+            "tool_name": tool_name,
+            "request_id": str(state.get("request_id") or ""),
+            "session_id": str(state.get("session_id") or ""),
+            "start_ts": start_ts,
+            "status": "start",
+            "retry_count": 0,
+        },
+    )
+
+
+def _emit_tool_trace_end(
+    state: AgentState,
+    tool_name: str,
+    *,
+    start_ts: str,
+    started_perf: float,
+    status: str,
+    tool_result: Dict[str, Any] | Exception | None = None,
+    error_code: str = "",
+) -> None:
+    normalized_status = str(status or "ok").strip().lower() or "ok"
+    end_ts = _utc_now_iso()
+    latency_ms = max(0, int((time.perf_counter() - started_perf) * 1000))
+    retry_count = _tool_retry_count(tool_result)
+    payload = {
+        "tool_name": tool_name,
+        "request_id": str(state.get("request_id") or ""),
+        "session_id": str(state.get("session_id") or ""),
+        "start_ts": start_ts,
+        "end_ts": end_ts,
+        "latency_ms": latency_ms,
+        "status": normalized_status,
+        "retry_count": retry_count,
+        "error_code": str(error_code or "").strip().lower(),
+    }
+    emit_trace_event(
+        trace_id=state.get("trace_id", ""),
+        stage="tool_call",
+        outcome=normalized_status,
+        payload=payload,
+    )
 
 
 def _normalize_text(text: str) -> str:
@@ -1080,8 +1276,20 @@ def _build_scenario_advice(state: AgentState, vietnamese: bool) -> str:
 
 def _build_education_only_advice(state: AgentState, vietnamese: bool) -> str:
     risk = state.get("tool_outputs", {}).get("risk_profile_non_investment_v1", {})
+    stock_external = state.get("tool_outputs", {}).get("stock_agent_external_v1", {})
     risk_band = str(risk.get("risk_band") or "")
     runway = _safe_float(risk.get("emergency_runway_months"))
+    stock_summary = str(stock_external.get("summary") or "").strip() if isinstance(stock_external, dict) else ""
+    stock_status = str(stock_external.get("status") or "").strip().lower() if isinstance(stock_external, dict) else ""
+    stock_alternatives = (
+        [
+            str(item).strip()
+            for item in stock_external.get("alternatives", [])
+            if isinstance(item, str) and str(item).strip()
+        ]
+        if isinstance(stock_external, dict)
+        else []
+    )
     base = "I can provide educational financial guidance only and cannot execute buy/sell actions."
     if vietnamese:
         lines = [
@@ -1093,6 +1301,11 @@ def _build_education_only_advice(state: AgentState, vietnamese: bool) -> str:
             lines.append(f"- Muc rui ro hien tai: {risk_band}")
             if runway > 0:
                 lines.append(f"- Runway uoc tinh: {runway:.2f} thang")
+        if stock_summary:
+            prefix = "fallback" if stock_status == "fallback" else "stock-agent"
+            lines.append(f"- Tom tat ({prefix}): {stock_summary}")
+            if stock_alternatives:
+                lines.append(f"- Lua chon thay the: {stock_alternatives[0]}")
         lines.append("")
         lines.append(
             "Ban co the hoi minh ve quan ly dong tien, ngan sach va ke hoach tiet kiem an toan."
@@ -1105,6 +1318,8 @@ def _build_education_only_advice(state: AgentState, vietnamese: bool) -> str:
             base += f" (runway {runway:.2f} months)."
         else:
             base += "."
+    if stock_summary:
+        base += f" Stock path note: {stock_summary}"
     return base
 
 
@@ -1359,12 +1574,14 @@ def _record_tool_output(state: AgentState, tool_name: str, output: Dict[str, Any
 
 
 def _record_tool_error(state: AgentState, tool_name: str, exc: Exception) -> None:
+    error_code = str(getattr(exc, "code", "") or "").strip()
     tool_errors = state.get("tool_errors")
     if not isinstance(tool_errors, dict):
         tool_errors = {}
     tool_errors[tool_name] = {
         "error_type": type(exc).__name__,
         "message": str(exc),
+        "code": error_code,
         "stage": "tool_execution",
     }
     state["tool_errors"] = tool_errors
@@ -1372,8 +1589,64 @@ def _record_tool_error(state: AgentState, tool_name: str, exc: Exception) -> Non
     existing_meta = state.get("response_meta") if isinstance(state.get("response_meta"), dict) else {}
     reason_codes = [str(code).strip() for code in existing_meta.get("reason_codes", []) if str(code).strip()]
     reason_codes.append(f"tool_error:{tool_name}")
+    if error_code:
+        reason_codes.append(f"error_code:{error_code.lower()}")
+        if error_code.lower() in {"tool_unavailable", "tool_timeout"}:
+            reason_codes.append("degraded_mode_enabled")
     state["response_meta"] = {**existing_meta, "reason_codes": sorted(set(reason_codes))}
     logger.warning("tool_call_failed tool=%s trace=%s error=%s", tool_name, state.get("trace_id"), exc)
+
+
+def _handle_tool_result(
+    state: AgentState,
+    *,
+    result_tool_name: str,
+    result: Dict[str, Any] | Exception,
+    extraction_slots: Dict[str, Any],
+) -> None:
+    if isinstance(result, Exception):
+        _record_tool_error(state, result_tool_name, result)
+        return
+    if isinstance(result, dict) and result.get("skipped"):
+        return
+    if not isinstance(result, dict):
+        _record_tool_error(state, result_tool_name, RuntimeError("Tool result must be a dictionary."))
+        return
+
+    _record_tool_output(state, result_tool_name, result)
+    result_reason_codes = [
+        str(code).strip()
+        for code in result.get("reason_codes", [])
+        if str(code).strip()
+    ]
+    if result_reason_codes:
+        _append_response_reason_codes(state, result_reason_codes)
+
+    status = str(result.get("status") or "").strip().lower()
+    if status.startswith("insufficient_"):
+        existing_meta = state.get("response_meta") if isinstance(state.get("response_meta"), dict) else {}
+        reason_codes = [
+            str(code).strip()
+            for code in existing_meta.get("reason_codes", [])
+            if str(code).strip()
+        ]
+        reason_codes.append(f"tool_status:{result_tool_name}:{status}")
+        state["response_meta"] = {**existing_meta, "reason_codes": sorted(set(reason_codes))}
+    if status == "fallback":
+        _append_response_reason_codes(state, [f"tool_status:{result_tool_name}:fallback"])
+
+    if result_tool_name == "risk_profile_non_investment_v1" and state.get("intent") == "invest":
+        state["education_only"] = True
+    if result_tool_name == "what_if_scenario_v1":
+        scenario_request = state.get("scenario_request", {})
+        if not isinstance(scenario_request, dict) or not scenario_request:
+            scenario_request = _build_scenario_request_from_slots(extraction_slots, {})
+        state["tool_outputs"]["scenario_request"] = scenario_request
+    if result_tool_name == "stock_agent_external_v1":
+        state["agent_outputs"] = {
+            **(state.get("agent_outputs", {}) if isinstance(state.get("agent_outputs"), dict) else {}),
+            "stock_agent_external_v1": result,
+        }
 
 
 def _extract_service_match_meta(evidence_pack: Any) -> Dict[str, Any]:
@@ -1402,6 +1675,7 @@ def _extract_service_match_meta(evidence_pack: Any) -> Dict[str, Any]:
 
 
 def encoding_gate(state: AgentState) -> AgentState:
+    _load_session_memory_into_state(state)
     prompt = state.get("prompt", "")
     normalized_prompt, encoding_decision = apply_prompt_encoding_gate(
         prompt,
@@ -1452,6 +1726,10 @@ def intent_router(state: AgentState) -> AgentState:
         return state
 
     prompt = state.get("prompt", "")
+    prompt_for_extraction = _augment_prompt_with_session_memory(
+        prompt,
+        state.get("session_memory", {}) if isinstance(state.get("session_memory"), dict) else {},
+    )
     clarify_round = _safe_int(state.get("clarification", {}).get("round"), 0)
     max_clarify = max(1, _safe_int(ROUTER_MAX_CLARIFY_QUESTIONS, 2))
     effective_mode = "semantic_enforce" if ROUTER_MODE == "rule" else ROUTER_MODE
@@ -1473,7 +1751,7 @@ def intent_router(state: AgentState) -> AgentState:
     }
     state["intent"] = "out_of_scope"
 
-    extraction, extraction_errors, extraction_meta = extract_intent_with_bedrock(prompt, retry_attempts=1)
+    extraction, extraction_errors, extraction_meta = extract_intent_with_bedrock(prompt_for_extraction, retry_attempts=1)
     if extraction is None:
         fallback_reason_codes = [*extraction_errors, "structured_invalid_no_rule_fallback"]
         fallback = RouteDecisionV1(
@@ -1518,6 +1796,15 @@ def intent_router(state: AgentState) -> AgentState:
 
     slots = extraction.slots if isinstance(extraction.slots, dict) else {}
     risk_appetite = _resolve_risk_appetite(prompt=prompt, slots=slots)
+    if risk_appetite == "unknown":
+        session_memory = state.get("session_memory", {}) if isinstance(state.get("session_memory"), dict) else {}
+        session_risk = str(session_memory.get("last_risk_appetite") or "").strip().lower()
+        if session_risk in {"conservative", "moderate", "aggressive"}:
+            risk_appetite = session_risk
+            extraction_meta = {
+                **extraction_meta,
+                "risk_appetite_source": "session_memory",
+            }
     if risk_appetite != "unknown":
         slots["risk_appetite"] = risk_appetite
     extraction = extraction.model_copy(update={"slots": slots})
@@ -1609,19 +1896,98 @@ def intent_router(state: AgentState) -> AgentState:
     return state
 
 
+def _build_safe_refusal_response(
+    state: AgentState,
+    *,
+    refusal_message: str,
+    disclaimer: str,
+    fallback_used: str,
+    extra_reason_codes: list[str] | None = None,
+) -> None:
+    existing_meta = state.get("response_meta") if isinstance(state.get("response_meta"), dict) else {}
+    reason_codes = [str(code).strip() for code in existing_meta.get("reason_codes", []) if str(code).strip()]
+    reason_codes.append("policy_refusal")
+    if extra_reason_codes:
+        reason_codes.extend([str(code).strip() for code in extra_reason_codes if str(code).strip()])
+    state["response"] = (
+        f"{refusal_message} "
+        f"Disclaimer: {disclaimer} "
+        f"Trace: {state['trace_id']}. Tools: suitability_guard_v1."
+    )
+    state["response_meta"] = {
+        **existing_meta,
+        "mode": RESPONSE_MODE,
+        "model_id": "",
+        "prompt_version": RESPONSE_PROMPT_VERSION,
+        "schema_version": RESPONSE_SCHEMA_VERSION,
+        "policy_version": RESPONSE_POLICY_VERSION,
+        "validation_passed": True,
+        "fallback_used": fallback_used,
+        "used_fact_ids": [],
+        "used_insight_ids": [],
+        "used_action_ids": [],
+        "latency_ms": 0,
+        "reason_codes": sorted(set(reason_codes)),
+        "disclaimer_effective": disclaimer,
+        "tool_errors": state.get("tool_errors", {}),
+    }
+
+
+def _degraded_suitability_decision(
+    state: AgentState,
+    *,
+    requested_action: str,
+    exc: Exception,
+) -> Dict[str, Any]:
+    error_code = str(getattr(exc, "code", "") or "").strip().lower() or "safety_guard_unavailable"
+    reason_codes = [
+        "safety_guard_degraded",
+        "degraded_mode_enabled",
+        f"safety_guard_error:{error_code}",
+    ]
+    action_text = requested_action.strip().lower() if isinstance(requested_action, str) else ""
+    if action_text.startswith("recommend_"):
+        refusal = "I cannot provide buy/sell recommendations while policy guard service is unavailable."
+    elif action_text in {"buy", "sell", "trade", "execute", "order"}:
+        refusal = "I cannot execute buy/sell actions while policy guard service is unavailable."
+    else:
+        refusal = "Policy guard is temporarily unavailable. I can continue with education-only guidance."
+    return {
+        "allow": False,
+        "decision": "deny_recommendation",
+        "reason_codes": reason_codes,
+        "required_disclaimer": DEFAULT_DISCLAIMER,
+        "refusal_message": refusal,
+        "education_only": True,
+        "trace_id": state.get("trace_id", ""),
+        "status": "fallback",
+        "source": "safety_guard_degraded",
+        "warnings": [str(exc)],
+    }
+
+
 def suitability_guard(state: AgentState) -> AgentState:
     if state.get("response"):
         return state
 
     requested_action = _requested_action(state["prompt"])
-    decision = suitability_guard_tool(
-        state["user_token"],
-        user_id=state["user_id"],
-        intent=state.get("intent", ""),
-        requested_action=requested_action,
-        prompt=state["prompt"],
-        trace_id=state["trace_id"],
-    )
+    try:
+        decision = suitability_guard_tool(
+            state["user_token"],
+            user_id=state["user_id"],
+            intent=state.get("intent", ""),
+            requested_action=requested_action,
+            prompt=state["prompt"],
+            trace_id=state["trace_id"],
+        )
+    except Exception as exc:
+        _record_tool_error(state, "suitability_guard_v1", exc)
+        decision = _degraded_suitability_decision(
+            state,
+            requested_action=requested_action,
+            exc=exc,
+        )
+
     if _should_override_recommendation_deny(state.get("intent", ""), requested_action, decision):
         disclaimer = str(decision.get("required_disclaimer") or DEFAULT_DISCLAIMER)
         reason_codes = [str(code).strip() for code in decision.get("reason_codes", []) if str(code).strip()]
@@ -1638,37 +2004,26 @@ def suitability_guard(state: AgentState) -> AgentState:
             "reason_codes": sorted(set(reason_codes)),
             "education_only": True,
         }
-    state["tool_outputs"]["suitability_guard_v1"] = decision
-    state["tool_calls"].append("suitability_guard_v1")
+    _record_tool_output(state, "suitability_guard_v1", decision)
     state["education_only"] = bool(decision.get("education_only") or decision.get("decision") == "education_only")
     if not bool(decision.get("allow", True)):
         refusal = str(decision.get("refusal_message") or "Action is not allowed by policy.")
         disclaimer = str(decision.get("required_disclaimer") or DEFAULT_DISCLAIMER)
-        existing_meta = state.get("response_meta") if isinstance(state.get("response_meta"), dict) else {}
-        reason_codes = [str(code).strip() for code in existing_meta.get("reason_codes", []) if str(code).strip()]
-        reason_codes.append("policy_refusal")
-        state["response"] = (
-            f"{refusal} "
-            f"Disclaimer: {disclaimer} "
-            f"Trace: {state['trace_id']}. Tools: suitability_guard_v1."
+        decision_reason_codes = [
+            str(code).strip() for code in decision.get("reason_codes", []) if str(code).strip()
+        ]
+        fallback_used = (
+            "safety_guard_degraded"
+            if "safety_guard_degraded" in decision_reason_codes
+            else "suitability_refusal"
         )
-        state["response_meta"] = {
-            **existing_meta,
-            "mode": RESPONSE_MODE,
-            "model_id": "",
-            "prompt_version": RESPONSE_PROMPT_VERSION,
-            "schema_version": RESPONSE_SCHEMA_VERSION,
-            "policy_version": RESPONSE_POLICY_VERSION,
-            "validation_passed": True,
-            "fallback_used": "suitability_refusal",
-            "used_fact_ids": [],
-            "used_insight_ids": [],
-            "used_action_ids": [],
-            "latency_ms": 0,
-            "reason_codes": sorted(set(reason_codes)),
-            "disclaimer_effective": disclaimer,
-            "tool_errors": state.get("tool_errors", {}),
-        }
+        _build_safe_refusal_response(
+            state,
+            refusal_message=refusal,
+            disclaimer=disclaimer,
+            fallback_used=fallback_used,
+            extra_reason_codes=decision_reason_codes,
+        )
     return state
 
 
@@ -1693,14 +2048,187 @@ def retrieve_kb(state: AgentState) -> AgentState:
     query = _build_kb_query(state.get("prompt", ""), state.get("intent", ""))
     intent = state.get("intent", "")
     kb_filters = {"intent": str(intent or "").strip().lower()}
-    state["kb"] = kb_retrieve(
-        query,
-        kb_filters,
-        state["user_token"],
-        trace_id=state.get("trace_id"),
-        intent=intent,
-    )
+    if str(RETRIEVAL_ADAPTER or "local").strip().lower() == "local":
+        state["kb"] = kb_retrieve(
+            query,
+            kb_filters,
+            state["user_token"],
+            trace_id=state.get("trace_id"),
+            intent=intent,
+        )
+    else:
+        state["kb"] = get_index_client().search(
+            query,
+            kb_filters,
+            user_token=state["user_token"],
+            trace_id=state.get("trace_id"),
+            intent=intent,
+        )
     return state
+
+
+def _append_response_reason_codes(state: AgentState, reason_codes: list[str]) -> None:
+    cleaned = [str(code).strip() for code in reason_codes if str(code).strip()]
+    if not cleaned:
+        return
+    existing = state.get("response_meta") if isinstance(state.get("response_meta"), dict) else {}
+    merged = [
+        str(code).strip()
+        for code in existing.get("reason_codes", [])
+        if str(code).strip()
+    ]
+    merged.extend(cleaned)
+    state["response_meta"] = {**existing, "reason_codes": sorted(set(merged))}
+
+
+def _stock_risk_band_from_state(state: AgentState, extraction_slots: Dict[str, Any]) -> str:
+    slot_band = str((extraction_slots or {}).get("risk_appetite") or "").strip().lower()
+    if slot_band in {"conservative", "moderate", "aggressive"}:
+        return slot_band
+    profile = state.get("user_profile", {}) if isinstance(state.get("user_profile"), dict) else {}
+    profile_band = str(profile.get("risk_appetite") or "").strip().lower()
+    if profile_band in {"conservative", "moderate", "aggressive"}:
+        return profile_band
+    risk_tool = state.get("tool_outputs", {}).get("risk_profile_non_investment_v1", {})
+    if isinstance(risk_tool, dict):
+        tool_band = str(risk_tool.get("risk_band") or "").strip().lower()
+        if tool_band in {"conservative", "moderate", "aggressive"}:
+            return tool_band
+    return "unknown"
+
+
+def _build_stock_agent_request(state: AgentState, extraction_slots: Dict[str, Any]) -> StockAdvisoryRequest:
+    summary = state.get("tool_outputs", {}).get("spend_analytics_v1", {})
+    anomaly = state.get("tool_outputs", {}).get("anomaly_signals_v1", {})
+    net_cashflow = _safe_float((summary or {}).get("net_cashflow"), 0.0) if isinstance(summary, dict) else 0.0
+    anomaly_flags: list[str] = []
+    if isinstance(anomaly, dict):
+        anomaly_flags = [
+            str(item).strip()
+            for item in anomaly.get("flags", [])
+            if isinstance(item, str) and str(item).strip()
+        ]
+    runway_months = 0.0
+    risk_tool = state.get("tool_outputs", {}).get("risk_profile_non_investment_v1", {})
+    if isinstance(risk_tool, dict):
+        runway_months = _safe_float(risk_tool.get("emergency_runway_months"), 0.0)
+
+    risk_profile = StockRiskProfile(
+        risk_band=_stock_risk_band_from_state(state, extraction_slots),
+        horizon_months=max(0, _safe_int(extraction_slots.get("horizon_months"), 0)),
+        liquidity_need=str(extraction_slots.get("liquidity_need") or "").strip(),
+    )
+    constraints = StockConstraints(
+        education_only=bool(state.get("education_only", False) or str(state.get("intent") or "").lower() == "invest"),
+        suitability_required=True,
+    )
+    snapshot = StockContextSnapshot(
+        net_cashflow=net_cashflow,
+        runway_months=runway_months,
+        anomaly_flags=anomaly_flags,
+    )
+    return StockAdvisoryRequest(
+        user_id=str(state.get("user_id") or "demo-user"),
+        query=str(state.get("prompt") or ""),
+        risk_profile=risk_profile,
+        constraints=constraints,
+        context_snapshot=snapshot,
+    )
+
+
+def _stock_agent_fallback_payload(
+    state: AgentState,
+    *,
+    error_code: str,
+    reason: str,
+    request_id: str,
+) -> Dict[str, Any]:
+    return {
+        "status": "fallback",
+        "source": "planner_fallback",
+        "summary": (
+            "Stock advisory service is temporarily unavailable. "
+            "Continuing with education-only cashflow and risk guidance."
+        ),
+        "alternatives": [
+            "Review liquidity runway and emergency buffer.",
+            "Prioritize debt, savings, and budget stability before risk assets.",
+        ],
+        "reason_codes": ["stock_agent_unavailable_fallback", error_code],
+        "warnings": [reason],
+        "request_id": request_id,
+        "trace_id": state.get("trace_id", ""),
+    }
+
+
+def select_agent(state: AgentState) -> AgentState:
+    if state.get("response"):
+        return state
+    if bool(state.get("clarification", {}).get("pending")):
+        state["selected_agent"] = "planner_internal"
+        return state
+
+    intent = str(state.get("intent") or "").strip().lower()
+    if intent != "invest":
+        state["selected_agent"] = "planner_internal"
+        return state
+
+    route_decision = state.get("route_decision", {}) if isinstance(state.get("route_decision"), dict) else {}
+    tool_bundle = route_decision.get("tool_bundle") if isinstance(route_decision.get("tool_bundle"), list) else []
+    wants_external_stock = "stock_agent_external_v1" in tool_bundle
+    if not wants_external_stock or not STOCK_AGENT_EXTERNAL_ENABLED:
+        state["selected_agent"] = "planner_internal"
+        if wants_external_stock and not STOCK_AGENT_EXTERNAL_ENABLED:
+            _append_response_reason_codes(state, ["stock_agent_external_disabled"])
+        return state
+
+    state["selected_agent"] = "stock_external"
+    return state
+
+
+def _should_degrade_tool_failure(tool_name: str, exc: Exception) -> bool:
+    if not DEGRADED_MODE_ENABLED:
+        return False
+    if tool_name == "suitability_guard_v1":
+        return False
+    return isinstance(exc, (ToolUnavailableError, ToolTimeoutError))
+
+
+def _tool_degraded_fallback_payload(tool_name: str, state: AgentState, exc: Exception) -> Dict[str, Any]:
+    error_code = str(getattr(exc, "code", "") or "").strip().lower() or "tool_unavailable"
+    reason_codes = [
+        "degraded_mode_enabled",
+        "tool_unavailable_degraded",
+        f"degraded_tool:{tool_name}",
+        f"degraded_error:{error_code}",
+    ]
+    payload: Dict[str, Any] = {
+        "status": "fallback",
+        "source": "degraded_mode",
+        "reason_codes": reason_codes,
+        "warnings": [str(exc)],
+        "trace_id": state.get("trace_id", ""),
+    }
+    if tool_name == "risk_profile_non_investment_v1":
+        payload.update(
+            {
+                "risk_band": "unknown",
+                "cashflow_volatility": 0.0,
+                "emergency_runway_months": 0.0,
+                "overspend_propensity": 0.0,
+            }
+        )
+    if tool_name == "stock_agent_external_v1":
+        payload.update(
+            {
+                "summary": "Stock advisory service unavailable; continue with education-only guidance.",
+                "alternatives": [
+                    "Review emergency buffer and cashflow stability first.",
+                    "Avoid execution recommendations until market data is available.",
+                ],
+            }
+        )
+    return payload
 
 
 def _execute_tool_safe(tool_name: str, state: AgentState, extraction_slots: Dict[str, Any]) -> tuple[str, Dict[str, Any] | Exception]:
@@ -1835,9 +2363,70 @@ def _execute_tool_safe(tool_name: str, state: AgentState, extraction_slots: Dict
                 trace_id=state["trace_id"],
             )
             return tool_name, result
+
+        if tool_name == "stock_agent_external_v1":
+            if str(state.get("selected_agent") or "").strip().lower() != "stock_external":
+                return tool_name, {"status": "skipped", "skipped": True, "reason_codes": ["stock_agent_not_selected"]}
+
+            request_obj = _build_stock_agent_request(state, extraction_slots)
+            request_payload = request_obj.to_payload()
+            request_id = new_request_id()
+            idempotency_key = make_idempotency_key(
+                namespace="stock_agent_external_v1",
+                payload=request_payload,
+                trace_id=str(state.get("trace_id") or ""),
+            )
+            try:
+                response = get_stock_agent_client().advisory(
+                    request_obj,
+                    trace_id=state["trace_id"],
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                )
+                return tool_name, {
+                    "status": "ok",
+                    "source": "stock_external",
+                    "summary": response.summary,
+                    "alternatives": response.alternatives,
+                    "suitability_check": {
+                        "status": response.suitability_check.status,
+                        "reasons": response.suitability_check.reasons,
+                    },
+                    "citations": response.citations,
+                    "confidence": response.confidence,
+                    "warnings": response.warnings,
+                    "trace_ref": response.trace_ref,
+                    "request_id": request_id,
+                    "market_snapshot": response.market_snapshot,
+                    "constraints": response.portfolio_constraints,
+                }
+            except ExternalAgentUnavailableError as exc:
+                metadata = exc.metadata if isinstance(exc.metadata, dict) else {}
+                reason = str(metadata.get("error") or metadata.get("reason") or exc.message)
+                return tool_name, _stock_agent_fallback_payload(
+                    state,
+                    error_code=exc.code,
+                    reason=reason,
+                    request_id=request_id,
+                )
+            except ValidationFailedError as exc:
+                return tool_name, _stock_agent_fallback_payload(
+                    state,
+                    error_code=exc.code,
+                    reason=exc.message,
+                    request_id=request_id,
+                )
         
         return tool_name, {"error": f"Unknown tool: {tool_name}"}
     except Exception as exc:
+        if _should_degrade_tool_failure(tool_name, exc):
+            logger.warning(
+                "Tool degraded fallback enabled: tool=%s trace=%s error=%s",
+                tool_name,
+                state.get("trace_id"),
+                exc,
+            )
+            return tool_name, _tool_degraded_fallback_payload(tool_name, state, exc)
         logger.warning("Tool execution failed: tool=%s error=%s", tool_name, exc)
         return tool_name, exc
 
@@ -1862,50 +2451,153 @@ def decision_engine(state: AgentState) -> AgentState:
 
     # Filter out suitability_guard (executed earlier)
     tools_to_execute = [t for t in tool_bundle if t != "suitability_guard_v1"]
-    
-    # Execute tools in parallel for better performance
-    logger.info("Executing %d tools in parallel: %s", len(tools_to_execute), tools_to_execute)
-    with ThreadPoolExecutor(max_workers=min(5, len(tools_to_execute) or 1)) as executor:
-        future_to_tool = {
-            executor.submit(_execute_tool_safe, tool_name, state, extraction_slots): tool_name
-            for tool_name in tools_to_execute
-        }
-        
-        # Use centralized timeout config, remove per-task timeout (requests already have timeouts)
-        for future in as_completed(future_to_tool, timeout=TOOL_EXECUTION_TIMEOUT):
-            tool_name = future_to_tool[future]
+
+    # MVP policy hook (swap-ready for Cedar adapter).
+    policy_engine = get_policy_engine()
+    authorized_tools: list[str] = []
+    for tool_name in tools_to_execute:
+        decision = policy_engine.authorize_tool_call(
+            tool_name,
+            context={
+                "intent": state.get("intent", ""),
+                "selected_agent": state.get("selected_agent", ""),
+                "trace_id": state.get("trace_id", ""),
+            },
+        )
+        if bool(decision.allow):
+            authorized_tools.append(tool_name)
+            continue
+        policy_start_ts = _utc_now_iso()
+        policy_started_perf = time.perf_counter()
+        _emit_tool_trace_start(state, tool_name, start_ts=policy_start_ts)
+        _append_response_reason_codes(state, decision.reason_codes or ["policy_tool_denied"])
+        _record_tool_output(
+            state,
+            tool_name,
+            {
+                "status": "skipped_by_policy",
+                "allow": False,
+                "reason_codes": decision.reason_codes,
+                "deny_code": decision.deny_code,
+            },
+        )
+        _emit_tool_trace_end(
+            state,
+            tool_name,
+            start_ts=policy_start_ts,
+            started_perf=policy_started_perf,
+            status="skipped_by_policy",
+            tool_result={
+                "status": "skipped_by_policy",
+                "reason_codes": decision.reason_codes,
+                "retry_count": 0,
+            },
+            error_code=str(decision.deny_code or "policy_deny"),
+        )
+    tools_to_execute = authorized_tools
+
+    # Execute independent tools in parallel.
+    logger.info("Executing %d independent tools in parallel: %s", len(tools_to_execute), tools_to_execute)
+    if tools_to_execute:
+        with ThreadPoolExecutor(max_workers=min(5, len(tools_to_execute))) as executor:
+            future_to_tool: Dict[Any, str] = {}
+            future_trace_meta: Dict[Any, tuple[str, float]] = {}
+            for tool_name in tools_to_execute:
+                start_ts = _utc_now_iso()
+                started_perf = time.perf_counter()
+                _emit_tool_trace_start(state, tool_name, start_ts=start_ts)
+                future = executor.submit(_execute_tool_safe, tool_name, state, extraction_slots)
+                future_to_tool[future] = tool_name
+                future_trace_meta[future] = (start_ts, started_perf)
+
             try:
-                result_tool_name, result = future.result()  # No timeout here - requests handle individual timeouts
-                if isinstance(result, Exception):
-                    _record_tool_error(state, result_tool_name, result)
-                elif isinstance(result, dict) and result.get("skipped"):
-                    continue
-                else:
-                    _record_tool_output(state, result_tool_name, result)
-                    if isinstance(result, dict):
-                        status = str(result.get("status") or "").strip().lower()
-                        if status.startswith("insufficient_"):
-                            existing_meta = (
-                                state.get("response_meta") if isinstance(state.get("response_meta"), dict) else {}
+                for future in as_completed(future_to_tool, timeout=TOOL_EXECUTION_TIMEOUT):
+                    tool_name = future_to_tool[future]
+                    start_ts, started_perf = future_trace_meta.get(future, (_utc_now_iso(), time.perf_counter()))
+                    try:
+                        result_tool_name, result = future.result()
+                        _handle_tool_result(
+                            state,
+                            result_tool_name=result_tool_name,
+                            result=result,
+                            extraction_slots=extraction_slots,
+                        )
+                        if isinstance(result, Exception):
+                            error_code = str(getattr(result, "code", "") or "").strip().lower()
+                            _emit_tool_trace_end(
+                                state,
+                                result_tool_name,
+                                start_ts=start_ts,
+                                started_perf=started_perf,
+                                status="error",
+                                tool_result=result,
+                                error_code=error_code,
                             )
-                            reason_codes = [
-                                str(code).strip()
-                                for code in existing_meta.get("reason_codes", [])
-                                if str(code).strip()
-                            ]
-                            reason_codes.append(f"tool_status:{result_tool_name}:{status}")
-                            state["response_meta"] = {**existing_meta, "reason_codes": sorted(set(reason_codes))}
-                    # Special handling for some tools
-                    if result_tool_name == "risk_profile_non_investment_v1" and state.get("intent") == "invest":
-                        state["education_only"] = True
-                    if result_tool_name == "what_if_scenario_v1":
-                        scenario_request = state.get("scenario_request", {})
-                        if not isinstance(scenario_request, dict) or not scenario_request:
-                            scenario_request = _build_scenario_request_from_slots(extraction_slots, {})
-                        state["tool_outputs"]["scenario_request"] = scenario_request
-            except Exception as exc:
-                logger.warning("Failed to get tool result: tool=%s error=%s", tool_name, exc)
-                _record_tool_error(state, tool_name, exc)
+                            continue
+                        if isinstance(result, dict):
+                            status = str(result.get("status") or "").strip().lower() or "ok"
+                            error_code = str(
+                                result.get("error_code")
+                                or result.get("code")
+                                or ""
+                            ).strip().lower()
+                        else:
+                            status = "ok"
+                            error_code = ""
+                        _emit_tool_trace_end(
+                            state,
+                            result_tool_name,
+                            start_ts=start_ts,
+                            started_perf=started_perf,
+                            status=status,
+                            tool_result=result,
+                            error_code=error_code,
+                        )
+                    except Exception as exc:
+                        logger.warning("Failed to get tool result: tool=%s error=%s", tool_name, exc)
+                        _record_tool_error(state, tool_name, exc)
+                        _emit_tool_trace_end(
+                            state,
+                            tool_name,
+                            start_ts=start_ts,
+                            started_perf=started_perf,
+                            status="error",
+                            tool_result=exc,
+                            error_code=str(getattr(exc, "code", "") or "").strip().lower(),
+                        )
+            except FutureTimeoutError:
+                logger.warning(
+                    "Tool execution timeout across parallel tasks: timeout=%ss trace=%s",
+                    TOOL_EXECUTION_TIMEOUT,
+                    state.get("trace_id"),
+                )
+                _append_response_reason_codes(
+                    state,
+                    ["tool_execution_timeout", "degraded_mode_enabled"],
+                )
+                for future, tool_name in future_to_tool.items():
+                    if future.done():
+                        continue
+                    future.cancel()
+                    start_ts, started_perf = future_trace_meta.get(future, (_utc_now_iso(), time.perf_counter()))
+                    timeout_exc = ToolTimeoutError(
+                        f"Tool execution exceeded global timeout ({TOOL_EXECUTION_TIMEOUT}s).",
+                        metadata={"tool": tool_name, "trace_id": state.get("trace_id", "")},
+                    )
+                    _record_tool_error(
+                        state,
+                        tool_name,
+                        timeout_exc,
+                    )
+                    _emit_tool_trace_end(
+                        state,
+                        tool_name,
+                        start_ts=start_ts,
+                        started_perf=started_perf,
+                        status="timeout",
+                        tool_result=timeout_exc,
+                        error_code="tool_timeout",
+                    )
 
     state["context"] = {
         "summary": state.get("tool_outputs", {}).get("spend_analytics_v1", {}),
@@ -2102,6 +2794,9 @@ def reasoning(state: AgentState) -> AgentState:
     response_meta["reason_codes"].extend(synth_errors)
     response_meta["model_id"] = str(synth_meta.get("model_id") or "")
     response_meta["prompt_version"] = str(synth_meta.get("prompt_version") or RESPONSE_PROMPT_VERSION)
+    response_meta["guardrail_enabled"] = bool(synth_meta.get("guardrail_enabled"))
+    response_meta["guardrail_id"] = str(synth_meta.get("guardrail_id") or "")
+    response_meta["guardrail_version"] = str(synth_meta.get("guardrail_version") or "")
 
     llm_body = ""
     fallback_used: str | None = None
@@ -2120,6 +2815,15 @@ def reasoning(state: AgentState) -> AgentState:
             response_meta["model_id"] = str(retry_meta.get("model_id") or response_meta["model_id"])
             response_meta["prompt_version"] = str(
                 retry_meta.get("prompt_version") or response_meta["prompt_version"]
+            )
+            response_meta["guardrail_enabled"] = bool(
+                retry_meta.get("guardrail_enabled", response_meta.get("guardrail_enabled", False))
+            )
+            response_meta["guardrail_id"] = str(
+                retry_meta.get("guardrail_id") or response_meta.get("guardrail_id") or ""
+            )
+            response_meta["guardrail_version"] = str(
+                retry_meta.get("guardrail_version") or response_meta.get("guardrail_version") or ""
             )
             if retry_plan is not None:
                 answer_plan = retry_plan
@@ -2146,6 +2850,15 @@ def reasoning(state: AgentState) -> AgentState:
             response_meta["model_id"] = str(retry_meta.get("model_id") or response_meta["model_id"])
             response_meta["prompt_version"] = str(
                 retry_meta.get("prompt_version") or response_meta["prompt_version"]
+            )
+            response_meta["guardrail_enabled"] = bool(
+                retry_meta.get("guardrail_enabled", response_meta.get("guardrail_enabled", False))
+            )
+            response_meta["guardrail_id"] = str(
+                retry_meta.get("guardrail_id") or response_meta.get("guardrail_id") or ""
+            )
+            response_meta["guardrail_version"] = str(
+                retry_meta.get("guardrail_version") or response_meta.get("guardrail_version") or ""
             )
             if retry_plan is not None:
                 answer_plan = retry_plan
@@ -2216,6 +2929,50 @@ def reasoning(state: AgentState) -> AgentState:
     return state
 
 
+def _build_session_memory_payload(state: AgentState) -> Dict[str, Any]:
+    existing = state.get("session_memory", {}) if isinstance(state.get("session_memory"), dict) else {}
+    existing_turns = existing.get("turns") if isinstance(existing.get("turns"), list) else []
+    turns: list[Dict[str, Any]] = [item for item in existing_turns if isinstance(item, dict)]
+    response_meta = state.get("response_meta", {}) if isinstance(state.get("response_meta"), dict) else {}
+    next_turn = {
+        "timestamp": _utc_now_iso(),
+        "prompt": _truncate_text(state.get("prompt", "")),
+        "intent": str(state.get("intent", "")).strip().lower(),
+        "selected_agent": str(state.get("selected_agent", "")).strip().lower(),
+        "fallback_used": str(response_meta.get("fallback_used") or ""),
+        "response_preview": _truncate_text(state.get("response", "")),
+        "reason_codes": [
+            str(code).strip()
+            for code in response_meta.get("reason_codes", [])
+            if str(code).strip()
+        ][:8],
+    }
+    turns.append(next_turn)
+    turns = turns[-SESSION_MEMORY_MAX_TURNS:]
+    payload: Dict[str, Any] = {
+        "schema_version": "session_memory_v1",
+        "updated_at": _utc_now_iso(),
+        "last_intent": str(state.get("intent") or "").strip().lower(),
+        "last_risk_appetite": str((state.get("user_profile") or {}).get("risk_appetite") or "").strip().lower(),
+        "user_profile": state.get("user_profile", {}) if isinstance(state.get("user_profile"), dict) else {},
+        "last_route_decision": (
+            {
+                "final_intent": str((state.get("route_decision") or {}).get("final_intent") or "").strip().lower(),
+                "reason_codes": [
+                    str(code).strip()
+                    for code in (state.get("route_decision") or {}).get("reason_codes", [])
+                    if str(code).strip()
+                ],
+            }
+            if isinstance(state.get("route_decision"), dict)
+            else {}
+        ),
+        "turns": turns,
+    }
+    redacted_payload = _redact_memory_value(payload)
+    return redacted_payload if isinstance(redacted_payload, dict) else payload
+
+
 def memory_update(state: AgentState) -> AgentState:
     routing_meta = {
         "intent": state.get("intent", ""),
@@ -2224,6 +2981,8 @@ def memory_update(state: AgentState) -> AgentState:
         "clarification": state.get("clarification", {}),
         "encoding_meta": state.get("encoding_meta", {}),
         "user_profile": state.get("user_profile", {}),
+        "selected_agent": state.get("selected_agent", ""),
+        "session_id": state.get("session_id", ""),
     }
     payload = {
         "summary": state.get("response", ""),
@@ -2235,16 +2994,60 @@ def memory_update(state: AgentState) -> AgentState:
         "advisory_context": state.get("advisory_context", {}),
         "answer_plan_v2": state.get("answer_plan_v2", {}),
         "user_profile": state.get("user_profile", {}),
+        "agent_outputs": state.get("agent_outputs", {}),
     }
     audit_write(state["user_id"], state["trace_id"], payload, state["user_token"])
+    session_id = str(state.get("session_id") or "").strip()
+    if SESSION_MEMORY_ENABLED and session_id:
+        try:
+            memory_payload = _build_session_memory_payload(state)
+            save_session(
+                session_id,
+                memory_payload,
+                ttl_seconds=SESSION_MEMORY_TTL_SECONDS,
+            )
+            state["session_memory"] = memory_payload
+            emit_trace_event(
+                trace_id=state.get("trace_id", ""),
+                stage="session_memory",
+                outcome="saved",
+                payload={
+                    "session_id": session_id,
+                    "ttl_seconds": SESSION_MEMORY_TTL_SECONDS,
+                    "turn_count": len(memory_payload.get("turns", []))
+                    if isinstance(memory_payload.get("turns"), list)
+                    else 0,
+                },
+            )
+        except Exception as exc:  # pragma: no cover - runtime path
+            logger.warning("session_memory_save_failed session=%s trace=%s error=%s", session_id, state.get("trace_id"), exc)
+            emit_trace_event(
+                trace_id=state.get("trace_id", ""),
+                stage="session_memory",
+                outcome="save_error",
+                payload={"session_id": session_id, "error": str(exc)},
+            )
+    response_meta = state.get("response_meta", {}) if isinstance(state.get("response_meta"), dict) else {}
+    emit_trace_event(
+        trace_id=state.get("trace_id", ""),
+        stage="memory_update",
+        outcome="ok",
+        reason_codes=response_meta.get("reason_codes", []),
+        payload={
+            "tool_calls": state.get("tool_calls", []),
+            "selected_agent": state.get("selected_agent", ""),
+            "response_fallback": response_meta.get("fallback_used"),
+        },
+    )
     return state
 
 
-def build_graph() -> Any:
+def _build_legacy_graph() -> Any:
     graph = StateGraph(AgentState)
     graph.add_node("encoding_gate", encoding_gate)
     graph.add_node("intent_router", intent_router)
     graph.add_node("suitability_guard", suitability_guard)
+    graph.add_node("select_agent", select_agent)
     graph.add_node("fetch_context", fetch_context)
     graph.add_node("retrieve_kb", retrieve_kb)
     graph.add_node("decision_engine", decision_engine)
@@ -2261,24 +3064,38 @@ def build_graph() -> Any:
         },
     )
     graph.add_edge("intent_router", "suitability_guard")
-    graph.add_edge("suitability_guard", "fetch_context")
+    graph.add_edge("suitability_guard", "select_agent")
+    graph.add_edge("select_agent", "decision_engine")
+    graph.add_edge("decision_engine", "fetch_context")
     graph.add_edge("fetch_context", "retrieve_kb")
-    graph.add_edge("retrieve_kb", "decision_engine")
-    graph.add_edge("decision_engine", "reasoning")
+    graph.add_edge("retrieve_kb", "reasoning")
     graph.add_edge("reasoning", "memory_update")
     graph.add_edge("memory_update", END)
 
     return graph.compile()
 
 
-def run_agent(prompt: str, user_token: str, user_id: str) -> Dict[str, Any]:
-    trace_id = f"trc_{uuid.uuid4().hex[:8]}"
+def build_graph() -> Any:
+    if ORCHESTRATOR_V2_ENABLED:
+        from orchestrator.graph_builder import build_orchestrator_graph
+
+        return build_orchestrator_graph(AgentState)
+    return _build_legacy_graph()
+
+
+def run_agent(prompt: str, user_token: str, user_id: str, session_id: str | None = None) -> Dict[str, Any]:
+    trace_id = new_trace_id()
+    request_id = new_request_id()
+    resolved_session_id = str(session_id or "").strip() or f"{str(user_id or 'demo-user').strip()}:default"
     graph = build_graph()
     state = graph.invoke(
         {
             "prompt": prompt,
             "user_token": user_token,
             "user_id": user_id,
+            "request_id": request_id,
+            "session_id": resolved_session_id,
+            "session_memory": {},
             "intent": "",
             "scenario_request": {},
             "context": {},
@@ -2295,6 +3112,8 @@ def run_agent(prompt: str, user_token: str, user_id: str) -> Dict[str, Any]:
             "advisory_context": {},
             "answer_plan_v2": {},
             "tool_errors": {},
+            "selected_agent": "planner_internal",
+            "agent_outputs": {},
             "response_meta": {
                 "mode": _response_mode(),
                 "model_id": "",
@@ -2324,9 +3143,12 @@ def run_agent(prompt: str, user_token: str, user_id: str) -> Dict[str, Any]:
     return {
         "response": state["response"],
         "trace_id": trace_id,
+        "request_id": request_id,
+        "session_id": resolved_session_id,
         "citations": state.get("kb", {}),
         "tool_calls": state.get("tool_calls", []),
         "tool_outputs": state.get("tool_outputs", {}),
+        "agent_outputs": state.get("agent_outputs", {}),
         "routing_meta": {
             "intent": state.get("intent", ""),
             "extraction": state.get("extraction", {}),
@@ -2334,6 +3156,8 @@ def run_agent(prompt: str, user_token: str, user_id: str) -> Dict[str, Any]:
             "clarification": state.get("clarification", {}),
             "encoding_meta": state.get("encoding_meta", {}),
             "user_profile": state.get("user_profile", {}),
+            "selected_agent": state.get("selected_agent", ""),
+            "session_id": resolved_session_id,
         },
         "response_meta": state.get("response_meta", {}),
     }
