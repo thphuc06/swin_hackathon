@@ -4,11 +4,13 @@ import hashlib
 import json
 import os
 import uuid
+from contextvars import ContextVar, Token
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable
 
 UTC = timezone.utc
 FINANCE_VERSION = "finance-mcp-v1.0.0"
+AUTH_CONTEXT: ContextVar[Dict[str, Any]] = ContextVar("finance_auth_context", default={})
 
 
 def new_trace_id(trace_id: str | None = None) -> str:
@@ -22,6 +24,18 @@ def canonical_hash(payload: Dict[str, Any]) -> str:
 
 def now_utc() -> datetime:
     return datetime.now(tz=UTC)
+
+
+def set_auth_context(auth_context: Dict[str, Any]) -> Token:
+    return AUTH_CONTEXT.set(dict(auth_context or {}))
+
+
+def reset_auth_context(token: Token) -> None:
+    AUTH_CONTEXT.reset(token)
+
+
+def current_auth_context() -> Dict[str, Any]:
+    return dict(AUTH_CONTEXT.get())
 
 
 def iso_utc(value: datetime | None = None) -> str:
@@ -115,6 +129,9 @@ def build_output(
 def ensure_user_scope(auth_user_id: str, requested_user_id: str) -> None:
     dev_bypass = os.getenv("DEV_BYPASS_AUTH", "false").strip().lower() in {"1", "true", "yes", "on"}
     if dev_bypass and auth_user_id == "demo-user":
+        return
+    caller_type = str(current_auth_context().get("caller_type") or "user").strip().lower()
+    if caller_type == "service":
         return
     if auth_user_id != requested_user_id:
         raise PermissionError("user_id in request does not match authenticated subject")

@@ -3,6 +3,9 @@
 Updated: 2026-03-04  
 Purpose: one setup document with explicit field mapping, so you can configure quickly without re-discovery.
 
+Detailed Gateway outbound OAuth setup for `finance-mcp`:
+- `backend/docs/gateway_finance_mcp_outbound_setup.md`
+
 ## 1) Current flow in this codebase
 
 Primary E2E path:
@@ -49,6 +52,8 @@ Use this catalog ID when filling env files below.
 | `C4` | `COGNITO_USERNAME` | User Pool user | Create service user (or test user) |
 | `C5` | `COGNITO_PASSWORD` | User Pool user credential | Set service user password |
 | `C6` | `ACCESS_TOKEN` (for test calls) | Generated from `agent/genToken.py` | Run script and use `AccessToken` output |
+| `C7` | `COGNITO_ALLOWED_CLIENT_IDS` | Manual config for finance-mcp | Comma-separated allow-list of user client and outbound M2M client |
+| `C8` | `COGNITO_SERVICE_CLIENT_IDS` | Manual config for finance-mcp | Comma-separated list of outbound M2M client IDs |
 
 ## 3.3 Supabase / Finance MCP fields
 
@@ -124,6 +129,8 @@ For AWS-real runtime behavior:
 | `DEV_BYPASS_AUTH` | `M2` |
 | `COGNITO_USER_POOL_ID` (required when bypass=false) | `C1` |
 | `COGNITO_CLIENT_ID` (required when bypass=false) | `C2` |
+| `COGNITO_ALLOWED_CLIENT_IDS` (recommended for hardened Gateway auth) | `C7` |
+| `COGNITO_SERVICE_CLIENT_IDS` (recommended for hardened Gateway auth) | `C8` |
 | `AWS_REGION` (required when bypass=false) | `A1` |
 | `FINANCE_MCP_FIXED_USER_ID` (optional demo override) | `M6` |
 

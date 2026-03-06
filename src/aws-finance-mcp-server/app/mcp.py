@@ -20,6 +20,7 @@ from app.finance import (
     suitability_guard,
     what_if_scenario,
 )
+from app.finance.common import reset_auth_context, set_auth_context
 
 router = APIRouter(tags=["mcp"])
 logger = logging.getLogger(__name__)
@@ -352,6 +353,13 @@ def mcp_jsonrpc(payload: Dict[str, Any], authorization: str | None = Header(defa
     arguments = params.get("arguments") or {}
     tool_name = _resolve_tool_name(requested_name)
     user, arguments = _apply_demo_user_override(user=user, arguments=arguments, tool_name=tool_name)
+    auth_context_token = set_auth_context(user)
+    logger.info(
+        "MCP tool request: tool=%s caller_type=%s client_id=%s",
+        tool_name,
+        user.get("caller_type", "user"),
+        user.get("client_id", ""),
+    )
 
     try:
         if tool_name == "spend_analytics_v1":
@@ -462,5 +470,7 @@ def mcp_jsonrpc(payload: Dict[str, Any], authorization: str | None = Header(defa
             "Tool execution failed",
             {"tool": tool_name, "error_type": type(exc).__name__, "message": str(exc)},
         )
+    finally:
+        reset_auth_context(auth_context_token)
 
     return _jsonrpc_ok(req_id, {"content": [{"type": "text", "text": json.dumps(result)}]})

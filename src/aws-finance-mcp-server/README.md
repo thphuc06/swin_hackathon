@@ -60,6 +60,8 @@ curl http://127.0.0.1:8020/mcp
 
 Optional:
 
+- `COGNITO_ALLOWED_CLIENT_IDS` (comma-separated allow-list; if omitted, falls back to `COGNITO_CLIENT_ID`)
+- `COGNITO_SERVICE_CLIENT_IDS` (comma-separated client IDs treated as trusted service callers)
 - `SQL_TIMEOUT_SEC` (default: `20`)
 - `USE_DARTS_FORECAST` (default: `true`)
 - `DEV_BYPASS_AUTH` (`true` for demo-first gateway integration)
@@ -70,6 +72,17 @@ Demo note:
 - If `DEV_BYPASS_AUTH=false` but your Supabase seed data belongs to a single fixed UUID, set `FINANCE_MCP_FIXED_USER_ID=<seed_user_id>`.
 - When this override is set, the server rewrites both the authenticated subject and the request `user_id` to that fixed UUID for all tools.
 - Remove `FINANCE_MCP_FIXED_USER_ID` after you align Cognito `sub` values with real application user IDs.
+
+Gateway hardened auth note:
+
+- For `Gateway -> finance-mcp` via outbound OAuth, create a second Cognito app client for machine-to-machine access.
+- Keep the existing user app client for inbound Gateway JWT auth.
+- Configure:
+  - `COGNITO_ALLOWED_CLIENT_IDS=<user_client_id>,<m2m_client_id>`
+  - `COGNITO_SERVICE_CLIENT_IDS=<m2m_client_id>`
+- User tokens still enforce `sub == user_id`.
+- Service tokens are treated as trusted service callers and do not use token `sub` as the business `user_id`.
+- During demo, keep `FINANCE_MCP_FIXED_USER_ID=<seed_user_id>` until you implement real user mapping.
 
 ## App Runner (Source deploy)
 
