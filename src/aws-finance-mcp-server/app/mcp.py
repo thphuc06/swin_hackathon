@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any, Dict
 
 from fastapi import APIRouter, Header
@@ -286,6 +287,32 @@ def _resolve_user(authorization: str | None) -> Dict[str, Any]:
     return verify_jwt(authorization)
 
 
+def _demo_fixed_user_id() -> str:
+    return str(os.getenv("FINANCE_MCP_FIXED_USER_ID", "") or "").strip()
+
+
+def _apply_demo_user_override(
+    *,
+    user: Dict[str, Any],
+    arguments: Dict[str, Any],
+    tool_name: str,
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    fixed_user_id = _demo_fixed_user_id()
+    if not fixed_user_id:
+        return user, arguments
+    if tool_name not in TOOL_SCHEMAS:
+        return user, arguments
+
+    overridden_user = dict(user)
+    overridden_user["sub"] = fixed_user_id
+
+    overridden_arguments = dict(arguments)
+    if "user_id" in TOOL_SCHEMAS[tool_name].get("properties", {}):
+        overridden_arguments["user_id"] = fixed_user_id
+
+    return overridden_user, overridden_arguments
+
+
 @router.get("/mcp")
 def mcp_health() -> str:
     return "MCP endpoint ready. Use POST /mcp for JSON-RPC."
@@ -324,6 +351,7 @@ def mcp_jsonrpc(payload: Dict[str, Any], authorization: str | None = Header(defa
     requested_name = str(params.get("name") or "")
     arguments = params.get("arguments") or {}
     tool_name = _resolve_tool_name(requested_name)
+    user, arguments = _apply_demo_user_override(user=user, arguments=arguments, tool_name=tool_name)
 
     try:
         if tool_name == "spend_analytics_v1":

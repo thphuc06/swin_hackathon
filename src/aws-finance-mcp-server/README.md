@@ -63,6 +63,13 @@ Optional:
 - `SQL_TIMEOUT_SEC` (default: `20`)
 - `USE_DARTS_FORECAST` (default: `true`)
 - `DEV_BYPASS_AUTH` (`true` for demo-first gateway integration)
+- `FINANCE_MCP_FIXED_USER_ID` (demo-only override: force all authenticated calls to use one Supabase `user_id`)
+
+Demo note:
+
+- If `DEV_BYPASS_AUTH=false` but your Supabase seed data belongs to a single fixed UUID, set `FINANCE_MCP_FIXED_USER_ID=<seed_user_id>`.
+- When this override is set, the server rewrites both the authenticated subject and the request `user_id` to that fixed UUID for all tools.
+- Remove `FINANCE_MCP_FIXED_USER_ID` after you align Cognito `sub` values with real application user IDs.
 
 ## App Runner (Source deploy)
 
@@ -79,6 +86,12 @@ After deploy:
 1. Verify `GET https://<service-url>/mcp`
 2. Verify `POST https://<service-url>/mcp` with `tools/list`
 3. Add this URL as `finance-mcp` target in AgentCore Gateway.
+
+Demo auth with seeded Supabase data:
+
+- Keep `DEV_BYPASS_AUTH=false` if you want to validate real JWT auth.
+- Set `FINANCE_MCP_FIXED_USER_ID=<seed_user_id>` in App Runner if your test token subject does not match the seeded Supabase `user_id`.
+- Remove the override later and migrate data/user mapping before switching to production auth.
 
 ## Smoke checks
 

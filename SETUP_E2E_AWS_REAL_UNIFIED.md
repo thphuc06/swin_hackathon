@@ -68,6 +68,7 @@ Use this catalog ID when filling env files below.
 | `M3` | `USE_LOCAL_MOCKS` | agent runtime env | `false` for AWS-real E2E |
 | `M4` | `WORKER_HTTP_TIMEOUT_SECONDS` | workers env | start with `15` |
 | `M5` | `FINANCE_MCP_AUTH_TOKEN` | workers env | usually `Bearer <C6>` |
+| `M6` | `FINANCE_MCP_FIXED_USER_ID` | finance-mcp env | demo-only: fixed Supabase `user_id` when Cognito `sub` does not match seeded data |
 
 ## 4) File Mapping Matrix (exactly what to put where)
 
@@ -124,6 +125,11 @@ For AWS-real runtime behavior:
 | `COGNITO_USER_POOL_ID` (required when bypass=false) | `C1` |
 | `COGNITO_CLIENT_ID` (required when bypass=false) | `C2` |
 | `AWS_REGION` (required when bypass=false) | `A1` |
+| `FINANCE_MCP_FIXED_USER_ID` (optional demo override) | `M6` |
+
+Notes:
+- Set `FINANCE_MCP_FIXED_USER_ID=<seed_user_id>` only for demo auth when your JWT `sub` does not match the seeded Supabase `user_id`.
+- Remove `FINANCE_MCP_FIXED_USER_ID` after you provision real user mapping and before hardened production rollout.
 
 ## 4.5 `frontend/.env.local`
 

@@ -45,5 +45,27 @@ resp = client.initiate_auth(
     AuthParameters=auth_params,
 )
 
-print("AccessToken:", resp["AuthenticationResult"]["AccessToken"])
-print("IdToken:", resp["AuthenticationResult"]["IdToken"])
+auth_result = resp.get("AuthenticationResult")
+if auth_result:
+    print("AccessToken:", auth_result["AccessToken"])
+    print("IdToken:", auth_result["IdToken"])
+    raise SystemExit(0)
+
+challenge_name = str(resp.get("ChallengeName") or "").strip()
+if challenge_name == "NEW_PASSWORD_REQUIRED":
+    raise SystemExit(
+        "Cognito returned NEW_PASSWORD_REQUIRED. "
+        "This user still has a temporary password. "
+        "Complete the first sign-in password change in Cognito Managed Login, "
+        "or set a permanent password for the user, then run genToken.py again."
+    )
+
+if challenge_name:
+    raise SystemExit(
+        f"Cognito returned challenge '{challenge_name}' instead of AuthenticationResult. "
+        "This script only handles direct token responses from USER_PASSWORD_AUTH."
+    )
+
+raise SystemExit(
+    f"Cognito did not return AuthenticationResult. Top-level response keys: {', '.join(resp.keys())}"
+)
