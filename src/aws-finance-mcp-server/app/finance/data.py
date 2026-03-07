@@ -33,19 +33,6 @@ def fetch_transactions_in_window(
     return filtered
 
 
-def fetch_latest_transaction_at(client: SupabaseRestClient, user_id: str) -> datetime | None:
-    rows = client.fetch_rows(
-        "transactions",
-        select="occurred_at",
-        filters={"user_id": f"eq.{user_id}"},
-        order="occurred_at.desc",
-        page_size=1,
-    )
-    if not rows:
-        return None
-    return parse_datetime(rows[0].get("occurred_at"))
-
-
 def fetch_jars(client: SupabaseRestClient, user_id: str) -> List[Dict[str, Any]]:
     return client.fetch_rows(
         "jars",

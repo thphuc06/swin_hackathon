@@ -20,7 +20,6 @@ from .common import (
 from .data import (
     fetch_categories,
     fetch_income_sources,
-    fetch_latest_transaction_at,
     fetch_transactions_in_window,
     write_audit_event,
 )
@@ -38,21 +37,6 @@ def _mad(values: List[float], median_value: float) -> float:
     return statistics.median(deviations) if deviations else 0.0
 
 
-def _effective_as_of(*, sql: SupabaseRestClient, user_id: str, as_of: str | None):
-    requested_as_of = parse_datetime(as_of)
-    try:
-        latest_txn_at = fetch_latest_transaction_at(sql, user_id)
-    except Exception:
-        return requested_as_of or now_utc()
-    if latest_txn_at is None:
-        return requested_as_of or now_utc()
-    if requested_as_of is None:
-        return latest_txn_at
-    if requested_as_of > latest_txn_at:
-        return latest_txn_at
-    return requested_as_of
-
-
 def anomaly_signals(
     *,
     auth_user_id: str,
@@ -66,11 +50,11 @@ def anomaly_signals(
     trace = new_trace_id(trace_id)
     ensure_user_scope(auth_user_id, user_id)
 
-    sql = client or get_supabase_client()
-    as_of_dt = _effective_as_of(sql=sql, user_id=user_id, as_of=as_of)
+    as_of_dt = parse_datetime(as_of) or now_utc()
     lookback = max(30, min(365, int(lookback_days or 90)))
     start_dt = daterange_start(as_of_dt, lookback)
 
+    sql = client or get_supabase_client()
     txns = fetch_transactions_in_window(sql, user_id=user_id, start_at=start_dt, end_at=as_of_dt)
     categories = fetch_categories(sql, user_id)
     income_sources = fetch_income_sources(sql, user_id)

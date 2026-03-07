@@ -32,35 +32,7 @@ Request:
 Response:
 
 - `Content-Type: text/event-stream; charset=utf-8`
-- Emits `data:` events for advisory text plus metadata lines:
-  - `Trace`
-  - `Tools`
-  - `ExecutedTools`
-  - `ResponseMode`
-  - `ResponseFallback`
-  - `ResponseReasonCodes`
-  - `ResponseStatus` (`pending|completed|failed`)
-  - `ResponseJobId` (when pending)
-  - `RetryAfterSeconds` (when pending)
-  - `Disclaimer`
-
-### `GET /chat/jobs/{response_id}?wait_seconds=8`
-
-Polls async dynamic response jobs created by `/chat/stream` when status is `pending`.
-
-Response:
-
-```json
-{
-  "status": "completed",
-  "response_id": "resp_xxx",
-  "result": "final advisory text ...",
-  "trace_id": "trc_xxx",
-  "tool_calls": ["financial-mcp-server___spend_analytics_v1"],
-  "response_meta": {},
-  "retry_after_seconds": 2
-}
-```
+- Emits `data:` events for advisory text, trace id, tool list, response mode, disclaimer.
 
 ## Goals
 

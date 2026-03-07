@@ -21,7 +21,6 @@ from .data import (
     fetch_budgets,
     fetch_categories,
     fetch_jars,
-    fetch_latest_transaction_at,
     fetch_transactions_in_window,
     write_audit_event,
 )
@@ -32,21 +31,6 @@ TOOL_NAME = "spend_analytics_v1"
 
 def _month_start(dt: datetime) -> datetime:
     return dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-
-
-def _effective_as_of(*, sql: SupabaseRestClient, user_id: str, as_of: str | None) -> datetime:
-    requested_as_of = parse_datetime(as_of)
-    try:
-        latest_txn_at = fetch_latest_transaction_at(sql, user_id)
-    except Exception:
-        return requested_as_of or now_utc()
-    if latest_txn_at is None:
-        return requested_as_of or now_utc()
-    if requested_as_of is None:
-        return latest_txn_at
-    if requested_as_of > latest_txn_at:
-        return latest_txn_at
-    return requested_as_of
 
 
 def spend_analytics(
@@ -62,11 +46,11 @@ def spend_analytics(
     trace = new_trace_id(trace_id)
     ensure_user_scope(auth_user_id, user_id)
 
-    sql = client or get_supabase_client()
-    as_of_dt = _effective_as_of(sql=sql, user_id=user_id, as_of=as_of)
+    as_of_dt = parse_datetime(as_of) or now_utc()
     range_days = parse_range_days(range_value)
     window_start = daterange_start(as_of_dt, range_days)
 
+    sql = client or get_supabase_client()
     txns = fetch_transactions_in_window(sql, user_id=user_id, start_at=window_start, end_at=as_of_dt)
     jars = fetch_jars(sql, user_id)
     categories = fetch_categories(sql, user_id)
