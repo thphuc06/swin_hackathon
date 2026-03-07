@@ -182,14 +182,14 @@ def _build_env_vars() -> dict[str, str]:
         or "25",
         "BEDROCK_RESPONSES_POLL_READ_TIMEOUT_SECONDS": os.getenv(
             "DEPLOY_BEDROCK_RESPONSES_POLL_READ_TIMEOUT_SECONDS",
-            "30",
+            "8",
         ).strip()
-        or "30",
+        or "8",
         "BEDROCK_RESPONSES_POLL_INTERVAL_SECONDS": os.getenv(
             "DEPLOY_BEDROCK_RESPONSES_POLL_INTERVAL_SECONDS",
-            "2",
+            "1",
         ).strip()
-        or "2",
+        or "1",
         "BEDROCK_RESPONSES_SYNC_WAIT_SECONDS": os.getenv(
             "DEPLOY_BEDROCK_RESPONSES_SYNC_WAIT_SECONDS",
             "15",

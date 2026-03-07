@@ -187,7 +187,6 @@ def _normalize_user_prompt(prompt: str, user_id: str, session_id: str) -> tuple[
         "[tool_call_policy]",
         f"- Intent hint: {intent_hint}.",
         f"- Use at most {max_calls} MCP tool calls total.",
-        "- Never invoke the same MCP tool more than once per request.",
         "- Do not call the same tool again with identical arguments.",
         "- Always include `user_id` from runtime_context in every tool call arguments.",
         "- If tool execution fails or times out, provide a concise fallback answer.",
@@ -201,9 +200,6 @@ def _normalize_user_prompt(prompt: str, user_id: str, session_id: str) -> tuple[
     if intent_hint == "spend_summary_30d":
         policy_lines.append(
             "- For spend_summary_30d, do not call suitability_guard_v1 or non-summary tools."
-        )
-        policy_lines.append(
-            "- Call spend_analytics_v1 first; call anomaly_signals_v1 at most once only when anomaly warning is required."
         )
         policy_lines.append(
             "- If spend_analytics_v1 returns a valid 30-day summary, finalize the answer without retrying."
@@ -237,15 +233,14 @@ def _responses_post(endpoint: str, body: str) -> requests.Response:
     return _post_with_sigv4(endpoint, body, timeout_seconds=float(BEDROCK_RESPONSES_CREATE_TIMEOUT_SECONDS))
 
 
-def _responses_get(retrieve_endpoint: str, *, timeout_seconds: float | None = None) -> requests.Response:
-    resolved_timeout = float(timeout_seconds) if timeout_seconds is not None else float(BEDROCK_RESPONSES_POLL_READ_TIMEOUT_SECONDS)
+def _responses_get(retrieve_endpoint: str) -> requests.Response:
     if BEDROCK_RESPONSES_API_KEY:
         return requests.get(
             retrieve_endpoint,
             headers={"Authorization": f"Bearer {BEDROCK_RESPONSES_API_KEY}"},
-            timeout=resolved_timeout,
+            timeout=float(BEDROCK_RESPONSES_POLL_READ_TIMEOUT_SECONDS),
         )
-    return _get_with_sigv4(retrieve_endpoint, timeout_seconds=resolved_timeout)
+    return _get_with_sigv4(retrieve_endpoint, timeout_seconds=float(BEDROCK_RESPONSES_POLL_READ_TIMEOUT_SECONDS))
 
 
 def _poll_until_terminal_or_budget(
@@ -267,21 +262,11 @@ def _poll_until_terminal_or_budget(
 
     while time.time() < deadline:
         poll_attempt_count += 1
-        remaining_seconds = deadline - time.time()
-        if remaining_seconds <= 0:
-            break
-        # Do not let a single poll call exceed remaining wait budget.
-        read_timeout_seconds = max(1.0, min(float(BEDROCK_RESPONSES_POLL_READ_TIMEOUT_SECONDS), remaining_seconds))
         try:
-            polled = _responses_get(retrieve_endpoint, timeout_seconds=read_timeout_seconds)
+            polled = _responses_get(retrieve_endpoint)
         except requests.ReadTimeout:
             poll_read_timeout_count += 1
-            remaining_after_timeout = deadline - time.time()
-            if remaining_after_timeout <= 0:
-                break
-            sleep_seconds = min(float(BEDROCK_RESPONSES_POLL_INTERVAL_SECONDS), max(0.0, remaining_after_timeout))
-            if sleep_seconds > 0:
-                time.sleep(sleep_seconds)
+            time.sleep(float(BEDROCK_RESPONSES_POLL_INTERVAL_SECONDS))
             continue
         except requests.RequestException as exc:
             raise RuntimeError(f"Responses API polling request failed: {exc}") from exc
@@ -294,12 +279,7 @@ def _poll_until_terminal_or_budget(
         status = str(latest_payload.get("status") or "").strip().lower()
         if status not in _RESPONSES_PENDING_STATUSES:
             return latest_payload, status, poll_attempt_count, poll_read_timeout_count, False
-        remaining_after_success = deadline - time.time()
-        if remaining_after_success <= 0:
-            break
-        sleep_seconds = min(float(BEDROCK_RESPONSES_POLL_INTERVAL_SECONDS), max(0.0, remaining_after_success))
-        if sleep_seconds > 0:
-            time.sleep(sleep_seconds)
+        time.sleep(float(BEDROCK_RESPONSES_POLL_INTERVAL_SECONDS))
 
     status = str(latest_payload.get("status") or "").strip().lower()
     timed_out = status in _RESPONSES_PENDING_STATUSES
