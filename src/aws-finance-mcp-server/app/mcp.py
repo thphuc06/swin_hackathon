@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import threading
+import time
 from typing import Any, Dict
 
 from fastapi import APIRouter, Header
@@ -24,6 +27,10 @@ from app.finance.common import reset_auth_context, set_auth_context
 
 router = APIRouter(tags=["mcp"])
 logger = logging.getLogger(__name__)
+_TOOL_CACHE_TTL_SECONDS = max(1, int(os.getenv("FINANCE_MCP_TOOL_RESULT_CACHE_TTL_SECONDS", "45")))
+_CACHEABLE_TOOLS = {"spend_analytics_v1", "anomaly_signals_v1"}
+_TOOL_RESULT_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
+_TOOL_RESULT_CACHE_LOCK = threading.Lock()
 
 
 class SpendInput(BaseModel):
@@ -333,6 +340,46 @@ def _inject_user_id_from_auth_context(
     return overridden_user, overridden_arguments
 
 
+def _to_json_safe(value: Any) -> Any:
+    try:
+        return json.loads(json.dumps(value, ensure_ascii=True))
+    except Exception:
+        return value
+
+
+def _tool_cache_key(tool_name: str, auth_user_id: str, arguments: Dict[str, Any]) -> str:
+    if tool_name not in _CACHEABLE_TOOLS:
+        return ""
+    normalized_args = dict(arguments or {})
+    normalized_args.pop("trace_id", None)
+    payload = json.dumps(normalized_args, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(f"{tool_name}|{auth_user_id}|{payload}".encode("utf-8")).hexdigest()[:24]
+    return f"{tool_name}:{auth_user_id}:{digest}"
+
+
+def _tool_cache_get(cache_key: str) -> Dict[str, Any] | None:
+    if not cache_key:
+        return None
+    now = time.time()
+    with _TOOL_RESULT_CACHE_LOCK:
+        stale = [key for key, (expires_at, _) in _TOOL_RESULT_CACHE.items() if expires_at <= now]
+        for key in stale:
+            _TOOL_RESULT_CACHE.pop(key, None)
+        cached = _TOOL_RESULT_CACHE.get(cache_key)
+        if not cached:
+            return None
+        _, result = cached
+        return _to_json_safe(result)
+
+
+def _tool_cache_put(cache_key: str, result: Dict[str, Any]) -> None:
+    if not cache_key:
+        return
+    expires_at = time.time() + float(_TOOL_CACHE_TTL_SECONDS)
+    with _TOOL_RESULT_CACHE_LOCK:
+        _TOOL_RESULT_CACHE[cache_key] = (expires_at, _to_json_safe(result))
+
+
 @router.get("/mcp")
 def mcp_health() -> str:
     return "MCP endpoint ready. Use POST /mcp for JSON-RPC."
@@ -379,6 +426,11 @@ def mcp_jsonrpc(payload: Dict[str, Any], authorization: str | None = Header(defa
         user.get("caller_type", "user"),
         user.get("client_id", ""),
     )
+    cache_key = _tool_cache_key(tool_name, str(user.get("sub") or ""), arguments)
+    cached_result = _tool_cache_get(cache_key)
+    if cached_result is not None:
+        logger.info("MCP tool cache hit: tool=%s ttl_seconds=%s", tool_name, _TOOL_CACHE_TTL_SECONDS)
+        return _jsonrpc_ok(req_id, {"content": [{"type": "text", "text": json.dumps(cached_result)}]})
 
     try:
         if tool_name == "spend_analytics_v1":
@@ -492,4 +544,5 @@ def mcp_jsonrpc(payload: Dict[str, Any], authorization: str | None = Header(defa
     finally:
         reset_auth_context(auth_context_token)
 
+    _tool_cache_put(cache_key, result)
     return _jsonrpc_ok(req_id, {"content": [{"type": "text", "text": json.dumps(result)}]})
