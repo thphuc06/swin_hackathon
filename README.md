@@ -45,7 +45,7 @@ python .\run_qa_tests.py --base-url http://127.0.0.1:8010 --token $token
 Frontend (Next.js) 
   → Backend (FastAPI) 
     → AgentCore Runtime (LangGraph) 
-      → MCP Gateway (https://jars-gw-afejhtqoqd...com/mcp)
+      → MCP Gateway (https://financial-adviosry-gw-iam-6k02cirh4d...com/mcp)
         → MCP Financial Tools Server (App Runner)
           → Supabase (Data Store)
 ```
@@ -350,6 +350,15 @@ aws logs tail /aws/bedrock-agentcore/runtimes/demoAgentCore-apmuG59e4V --follow
 pip install bedrock-agentcore bedrock-agentcore-starter-toolkit
 ```
 
+Before deploy, ensure `agent/.bedrock_agentcore.yaml` exists and points to the same AWS account you are using now.
+If it is missing or still points to an old account/runtime, re-generate it:
+
+```powershell
+cd agent
+$env:PYTHONUTF8="1"
+agentcore configure -n demoAgentCore -e main.py -r us-east-1 -ni
+```
+
 ### Standard Deployment (with optimizations)
 
 **Step 1: Generate Service Token**
@@ -361,8 +370,8 @@ python genToken.py 2>&1 | Select-String "^AccessToken:" | % { ($_ -replace "^Acc
 **Step 2: Deploy with Environment Variables**
 ```bash
 cd agent
-agentcore deploy --auto-update-on-conflict \
-  --env AGENTCORE_GATEWAY_ENDPOINT=https://jars-gw-afejhtqoqd.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp \
+agentcore launch --auto-update-on-conflict \
+  --env AGENTCORE_GATEWAY_ENDPOINT=https://financial-adviosry-gw-iam-6k02cirh4d.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp \
   --env DEFAULT_USER_TOKEN=$serviceToken \
   --env AWS_REGION=us-east-1 \
   --env BEDROCK_MODEL_ID=amazon.nova-pro-v1:0 \
@@ -383,8 +392,8 @@ agentcore deploy --auto-update-on-conflict \
 cd agent
 python genToken.py 2>&1 | Select-String "^AccessToken:" | % { ($_ -replace "^AccessToken:\s*","").Trim() } | Set-Variable serviceToken
 
-agentcore deploy --auto-update-on-conflict `
-  --env AGENTCORE_GATEWAY_ENDPOINT=https://jars-gw-afejhtqoqd.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp `
+agentcore launch --auto-update-on-conflict `
+  --env AGENTCORE_GATEWAY_ENDPOINT=https://financial-adviosry-gw-iam-6k02cirh4d.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp `
   --env DEFAULT_USER_TOKEN=$serviceToken `
   --env BEDROCK_READ_TIMEOUT=120 `
   --env TOOL_EXECUTION_TIMEOUT=120 `

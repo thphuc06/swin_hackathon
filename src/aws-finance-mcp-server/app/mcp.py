@@ -27,21 +27,21 @@ logger = logging.getLogger(__name__)
 
 
 class SpendInput(BaseModel):
-    user_id: str
+    user_id: str = ""
     range: str = "30d"
     as_of: str | None = None
     trace_id: str | None = None
 
 
 class AnomalyInput(BaseModel):
-    user_id: str
+    user_id: str = ""
     lookback_days: int = Field(default=90, ge=30, le=365)
     as_of: str | None = None
     trace_id: str | None = None
 
 
 class ForecastInput(BaseModel):
-    user_id: str
+    user_id: str = ""
     horizon: str = Field(default="weekly_12", pattern=r"^(daily_30|weekly_12)$")
     scenario_overrides: Dict[str, Any] = {}
     as_of: str | None = None
@@ -49,7 +49,7 @@ class ForecastInput(BaseModel):
 
 
 class AllocationInput(BaseModel):
-    user_id: str
+    user_id: str = ""
     monthly_income_override: float | None = Field(default=None, ge=0)
     goal_overrides: list[Dict[str, Any]] | None = None
     as_of: str | None = None
@@ -57,14 +57,14 @@ class AllocationInput(BaseModel):
 
 
 class RiskInput(BaseModel):
-    user_id: str
+    user_id: str = ""
     lookback_days: int = Field(default=180, ge=60, le=720)
     as_of: str | None = None
     trace_id: str | None = None
 
 
 class SuitabilityInput(BaseModel):
-    user_id: str
+    user_id: str = ""
     intent: str = ""
     requested_action: str = ""
     prompt: str = ""
@@ -72,7 +72,7 @@ class SuitabilityInput(BaseModel):
 
 
 class RecurringInput(BaseModel):
-    user_id: str
+    user_id: str = ""
     lookback_months: int = Field(default=6, ge=3, le=24)
     min_occurrence_months: int = Field(default=3, ge=2, le=12)
     recurring_overrides: list[Dict[str, Any]] = []
@@ -82,7 +82,7 @@ class RecurringInput(BaseModel):
 
 
 class GoalFeasibilityInput(BaseModel):
-    user_id: str
+    user_id: str = ""
     target_amount: float | None = Field(default=None, ge=0)
     horizon_months: int | None = Field(default=None, ge=1, le=24)
     goal_id: str | None = None
@@ -92,7 +92,7 @@ class GoalFeasibilityInput(BaseModel):
 
 
 class WhatIfInput(BaseModel):
-    user_id: str
+    user_id: str = ""
     horizon_months: int = Field(default=12, ge=1, le=24)
     seasonality: bool = True
     goal: str = "maximize_savings"
@@ -116,7 +116,7 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "as_of": {"type": "string"},
             "trace_id": {"type": "string"},
         },
-        "required": ["user_id"],
+        "required": [],
     },
     "anomaly_signals_v1": {
         "type": "object",
@@ -126,7 +126,7 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "as_of": {"type": "string"},
             "trace_id": {"type": "string"},
         },
-        "required": ["user_id"],
+        "required": [],
     },
     "cashflow_forecast_v1": {
         "type": "object",
@@ -137,7 +137,7 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "as_of": {"type": "string"},
             "trace_id": {"type": "string"},
         },
-        "required": ["user_id"],
+        "required": [],
     },
     "jar_allocation_suggest_v1": {
         "type": "object",
@@ -148,7 +148,7 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "as_of": {"type": "string"},
             "trace_id": {"type": "string"},
         },
-        "required": ["user_id"],
+        "required": [],
     },
     "risk_profile_non_investment_v1": {
         "type": "object",
@@ -158,7 +158,7 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "as_of": {"type": "string"},
             "trace_id": {"type": "string"},
         },
-        "required": ["user_id"],
+        "required": [],
     },
     "suitability_guard_v1": {
         "type": "object",
@@ -169,7 +169,7 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "prompt": {"type": "string"},
             "trace_id": {"type": "string"},
         },
-        "required": ["user_id"],
+        "required": [],
     },
     "recurring_cashflow_detect_v1": {
         "type": "object",
@@ -182,7 +182,7 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "as_of": {"type": "string"},
             "trace_id": {"type": "string"},
         },
-        "required": ["user_id"],
+        "required": [],
     },
     "goal_feasibility_v1": {
         "type": "object",
@@ -195,7 +195,7 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "as_of": {"type": "string"},
             "trace_id": {"type": "string"},
         },
-        "required": ["user_id"],
+        "required": [],
     },
     "what_if_scenario_v1": {
         "type": "object",
@@ -209,7 +209,7 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "as_of": {"type": "string"},
             "trace_id": {"type": "string"},
         },
-        "required": ["user_id"],
+        "required": [],
     },
 }
 

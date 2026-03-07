@@ -32,6 +32,7 @@ from retrieval.factory import get_index_client
 
 from config import (
     TOOL_ORCHESTRATION_MODE,
+    BEDROCK_RESPONSES_MODEL_ID,
     ENCODING_FAILFAST_SCORE_MIN,
     ENCODING_GATE_ENABLED,
     ENCODING_NORMALIZATION_FORM,
@@ -3085,7 +3086,14 @@ def build_graph() -> Any:
     return _build_legacy_graph()
 
 
-def run_agent(prompt: str, user_token: str, user_id: str, session_id: str | None = None) -> Dict[str, Any]:
+def run_agent(
+    prompt: str,
+    user_token: str,
+    user_id: str,
+    session_id: str | None = None,
+    response_id: str | None = None,
+    response_wait_seconds: float | None = None,
+) -> Dict[str, Any]:
     trace_id = new_trace_id()
     request_id = new_request_id()
     resolved_session_id = str(session_id or "").strip() or f"{str(user_id or 'demo-user').strip()}:default"
@@ -3097,8 +3105,13 @@ def run_agent(prompt: str, user_token: str, user_id: str, session_id: str | None
                 session_id=resolved_session_id,
                 trace_id=trace_id,
                 request_id=request_id,
+                response_id=response_id,
+                wait_seconds=response_wait_seconds,
             )
+            response_status = str(dynamic.get("status") or "completed").strip().lower() or "completed"
             tool_calls = dynamic.get("tool_calls", []) if isinstance(dynamic.get("tool_calls"), list) else []
+            executed_tools = dynamic.get("executed_tools", []) if isinstance(dynamic.get("executed_tools"), list) else []
+            reason_codes = dynamic.get("reason_codes", []) if isinstance(dynamic.get("reason_codes"), list) else []
             tool_chain = ", ".join([str(item).strip() for item in tool_calls if str(item).strip()])
             response_body = _finalize_response(
                 str(dynamic.get("text") or "").strip(),
@@ -3131,13 +3144,13 @@ def run_agent(prompt: str, user_token: str, user_id: str, session_id: str | None
                     "prompt_version": "responses_api_v1",
                     "schema_version": "responses_api_v1",
                     "policy_version": RESPONSE_POLICY_VERSION,
-                    "validation_passed": True,
+                    "validation_passed": response_status == "completed",
                     "fallback_used": None,
                     "used_fact_ids": [],
                     "used_insight_ids": [],
                     "used_action_ids": [],
                     "latency_ms": int(dynamic.get("latency_ms") or 0),
-                    "reason_codes": [],
+                    "reason_codes": sorted(set(str(code).strip() for code in reason_codes if str(code).strip())),
                     "disclaimer_effective": DEFAULT_DISCLAIMER,
                     "encoding_decision": "pass",
                     "encoding_score": 0.0,
@@ -3147,15 +3160,79 @@ def run_agent(prompt: str, user_token: str, user_id: str, session_id: str | None
                     "encoding_input_fingerprint": "",
                     "tool_errors": {},
                     "responses_id": str(dynamic.get("response_id") or ""),
+                    "response_status": response_status,
+                    "retry_after_seconds": int(dynamic.get("retry_after_seconds") or 0),
+                    "executed_tools": [str(item).strip() for item in executed_tools if str(item).strip()],
+                    "shortlist_tools": [
+                        str(item).strip()
+                        for item in (dynamic.get("shortlist_tools") or [])
+                        if str(item).strip()
+                    ],
+                    "poll_attempt_count": int(dynamic.get("poll_attempt_count") or 0),
+                    "poll_read_timeout_count": int(dynamic.get("poll_read_timeout_count") or 0),
                 },
             }
         except Exception as exc:
             logger.warning(
-                "responses_dynamic_failed trace=%s request=%s error=%s; falling back to bundle orchestration",
+                "responses_dynamic_failed trace=%s request=%s error=%s; returning dynamic failure response",
                 trace_id,
                 request_id,
                 exc,
             )
+            error_text = (
+                "Dynamic tool execution is temporarily unavailable. "
+                "Please retry in a moment."
+            )
+            response_body = _finalize_response(error_text, "", trace_id, "")
+            return {
+                "response": response_body,
+                "trace_id": trace_id,
+                "request_id": request_id,
+                "session_id": resolved_session_id,
+                "citations": {"matches": []},
+                "tool_calls": [],
+                "tool_outputs": {},
+                "agent_outputs": {},
+                "routing_meta": {
+                    "intent": "dynamic",
+                    "extraction": {},
+                    "route_decision": {},
+                    "clarification": {"pending": False, "round": 0, "max_questions": 0},
+                    "encoding_meta": {},
+                    "user_profile": {"risk_appetite": "unknown"},
+                    "selected_agent": "responses_dynamic",
+                    "session_id": resolved_session_id,
+                },
+                "response_meta": {
+                    "mode": "responses_dynamic",
+                    "model_id": BEDROCK_RESPONSES_MODEL_ID,
+                    "prompt_version": "responses_api_v1",
+                    "schema_version": "responses_api_v1",
+                    "policy_version": RESPONSE_POLICY_VERSION,
+                    "validation_passed": False,
+                    "fallback_used": "dynamic_error",
+                    "used_fact_ids": [],
+                    "used_insight_ids": [],
+                    "used_action_ids": [],
+                    "latency_ms": 0,
+                    "reason_codes": [f"dynamic_error:{exc.__class__.__name__}"],
+                    "disclaimer_effective": DEFAULT_DISCLAIMER,
+                    "encoding_decision": "pass",
+                    "encoding_score": 0.0,
+                    "encoding_repair_applied": False,
+                    "encoding_reason_codes": [],
+                    "encoding_guess": "",
+                    "encoding_input_fingerprint": "",
+                    "tool_errors": {},
+                    "responses_id": "",
+                    "response_status": "failed",
+                    "retry_after_seconds": 0,
+                    "executed_tools": [],
+                    "shortlist_tools": [],
+                    "poll_attempt_count": 0,
+                    "poll_read_timeout_count": 0,
+                },
+            }
 
     graph = build_graph()
     state = graph.invoke(

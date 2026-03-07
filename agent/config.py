@@ -32,6 +32,17 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _normalize_responses_model_id(raw_value: str) -> str:
+    normalized = str(raw_value or "").strip()
+    if normalized in {"openai.gpt-oss-120b", "openai.gpt-oss-120b-1:0"}:
+        return "openai.gpt-oss-120b"
+    if normalized.startswith("openai.gpt-oss-120b"):
+        return "openai.gpt-oss-120b"
+    if normalized:
+        return normalized
+    return "openai.gpt-oss-120b"
+
+
 AWS_REGION = os.getenv("AWS_REGION", "us-west-2")
 BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "")
 BEDROCK_GUARDRAIL_ID = os.getenv("BEDROCK_GUARDRAIL_ID", "")
@@ -43,6 +54,7 @@ BEDROCK_KB_ID = ""  # Unused - local KB implementation
 
 AGENTCORE_GATEWAY_ENDPOINT = os.getenv("AGENTCORE_GATEWAY_ENDPOINT", "")
 AGENTCORE_GATEWAY_ARN = os.getenv("AGENTCORE_GATEWAY_ARN", "").strip()
+AGENTCORE_GATEWAY_SERVER_LABEL = os.getenv("AGENTCORE_GATEWAY_SERVER_LABEL", "finance_gateway").strip() or "finance_gateway"
 AGENTCORE_GATEWAY_TOOL_NAME = os.getenv("AGENTCORE_GATEWAY_TOOL_NAME", "")
 AGENTCORE_MEMORY_ID = os.getenv("AGENTCORE_MEMORY_ID", "")
 
@@ -51,9 +63,8 @@ USE_LOCAL_MOCKS = _env_bool("USE_LOCAL_MOCKS", False)
 TOOL_ORCHESTRATION_MODE = os.getenv("TOOL_ORCHESTRATION_MODE", "bundle").strip().lower()
 if TOOL_ORCHESTRATION_MODE not in {"bundle", "responses_dynamic"}:
     TOOL_ORCHESTRATION_MODE = "bundle"
-BEDROCK_RESPONSES_MODEL_ID = (
-    os.getenv("BEDROCK_RESPONSES_MODEL_ID", "openai.gpt-oss-120b-1:0").strip()
-    or "openai.gpt-oss-120b-1:0"
+BEDROCK_RESPONSES_MODEL_ID = _normalize_responses_model_id(
+    os.getenv("BEDROCK_RESPONSES_MODEL_ID", "openai.gpt-oss-120b")
 )
 BEDROCK_RESPONSES_BASE_URL = (
     os.getenv("BEDROCK_RESPONSES_BASE_URL", f"https://bedrock-mantle.{AWS_REGION}.api.aws/v1").strip().rstrip("/")
@@ -61,6 +72,11 @@ BEDROCK_RESPONSES_BASE_URL = (
 )
 BEDROCK_RESPONSES_API_KEY = os.getenv("BEDROCK_RESPONSES_API_KEY", "").strip()
 BEDROCK_RESPONSES_TIMEOUT_SECONDS = max(10, _env_int("BEDROCK_RESPONSES_TIMEOUT_SECONDS", 120))
+BEDROCK_RESPONSES_CREATE_TIMEOUT_SECONDS = max(5, _env_int("BEDROCK_RESPONSES_CREATE_TIMEOUT_SECONDS", 25))
+BEDROCK_RESPONSES_POLL_READ_TIMEOUT_SECONDS = max(2, _env_int("BEDROCK_RESPONSES_POLL_READ_TIMEOUT_SECONDS", 8))
+BEDROCK_RESPONSES_POLL_INTERVAL_SECONDS = max(0.2, _env_float("BEDROCK_RESPONSES_POLL_INTERVAL_SECONDS", 1.0))
+BEDROCK_RESPONSES_SYNC_WAIT_SECONDS = max(3, _env_int("BEDROCK_RESPONSES_SYNC_WAIT_SECONDS", 15))
+BEDROCK_RESPONSES_RETRY_AFTER_SECONDS = max(1, _env_int("BEDROCK_RESPONSES_RETRY_AFTER_SECONDS", 2))
 BEDROCK_RESPONSES_MAX_OUTPUT_TOKENS = max(128, _env_int("BEDROCK_RESPONSES_MAX_OUTPUT_TOKENS", 1200))
 BEDROCK_RESPONSES_TEMPERATURE = max(0.0, min(1.0, _env_float("BEDROCK_RESPONSES_TEMPERATURE", 0.2)))
 ROUTER_MODE = os.getenv("ROUTER_MODE", "semantic_enforce").strip().lower()

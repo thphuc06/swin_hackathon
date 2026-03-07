@@ -186,14 +186,31 @@ Invoke-RestMethod -Method POST -Uri $gw -Headers @{ Authorization = "Bearer $tok
 
 ## 5.4 Deploy/update agent runtime
 
+Before deploy, ensure AgentCore local config exists and targets your current AWS account (avoid stale runtime/account IDs):
+
+```powershell
+cd c:\HCMUS\PYTHON\jars-fintech-agentcore-mvp\agent
+$env:PYTHONUTF8 = "1"
+agentcore configure -n demoAgentCore -e main.py -r us-east-1 -ni
+```
+
 ```powershell
 cd c:\HCMUS\PYTHON\jars-fintech-agentcore-mvp
+$env:AWS_PROFILE = "phuc_hoc"
+$env:PYTHONUTF8 = "1"
 $env:DEPLOY_BACKEND_API_BASE = "https://<reachable-backend-url>"
-$env:DEPLOY_AGENTCORE_GATEWAY_ENDPOINT = "https://<gateway-id>.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp"
+$env:DEPLOY_AGENTCORE_GATEWAY_ARN = "arn:aws:bedrock-agentcore:us-east-1:617287375312:gateway/financial-adviosry-gw-iam-6k02cirh4d"
+$env:DEPLOY_AGENTCORE_GATEWAY_ENDPOINT = "https://financial-adviosry-gw-iam-6k02cirh4d.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp"
+$env:DEPLOY_AGENTCORE_GATEWAY_SERVER_LABEL = "finance_gateway"
 $env:DEPLOY_AWS_REGION = "us-east-1"
-$env:DEPLOY_BEDROCK_MODEL_ID = "amazon.nova-pro-v1:0"
+$env:DEPLOY_BEDROCK_MODEL_ID = "openai.gpt-oss-120b-1:0"
+$env:DEPLOY_BEDROCK_RESPONSES_MODEL_ID = "openai.gpt-oss-120b"
+$env:DEPLOY_TOOL_ORCHESTRATION_MODE = "responses_dynamic"
 python .\deploy_agent.py
 ```
+
+> Note: `CUSTOM_JWT` gateway cannot be reused for Responses server-side tool execution.
+> Use a separate gateway with `authorizerType=AWS_IAM`.
 
 ## 5.5 Run backend local
 

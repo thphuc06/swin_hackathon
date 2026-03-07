@@ -3,10 +3,10 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from typing import Generator, Optional
+from typing import Any, Dict, Generator, Optional
 
 import requests
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -21,6 +21,102 @@ _MOJIBAKE_MARKERS = ("\u00c3", "\u00c2", "\u00e1\u00bb", "\ufffd")
 
 class ChatRequest(BaseModel):
     prompt: str
+
+
+def _join_csv(items: Any) -> str:
+    if not isinstance(items, list):
+        return ""
+    normalized = [str(item).strip() for item in items if str(item).strip()]
+    return ", ".join(normalized)
+
+
+def _runtime_response_meta(payload: Dict[str, Any]) -> Dict[str, Any]:
+    response_meta = payload.get("response_meta") if isinstance(payload.get("response_meta"), dict) else {}
+    mode = str(response_meta.get("mode") or "").strip()
+    fallback = str(response_meta.get("fallback_used") or "").strip()
+    reason_codes = _join_csv(response_meta.get("reason_codes"))
+    response_status = str(response_meta.get("response_status") or "").strip().lower()
+    response_job_id = str(response_meta.get("responses_id") or "").strip()
+    retry_after_seconds = int(response_meta.get("retry_after_seconds") or 0)
+    executed_tools = _join_csv(response_meta.get("executed_tools"))
+    return {
+        "mode": mode,
+        "fallback": fallback,
+        "reason_codes": reason_codes,
+        "response_status": response_status,
+        "response_job_id": response_job_id,
+        "retry_after_seconds": retry_after_seconds,
+        "executed_tools": executed_tools,
+    }
+
+
+def _invoke_agentcore_json(
+    *,
+    prompt: str,
+    bearer_token: Optional[str],
+    user_id: Optional[str],
+    response_id: str | None = None,
+    response_wait_seconds: float | None = None,
+    timeout_seconds: int = 180,
+) -> Dict[str, Any]:
+    agent_arn = os.getenv("AGENTCORE_RUNTIME_ARN")
+    region = os.getenv("AWS_REGION", "us-east-1")
+    payload: Dict[str, Any] = {"prompt": prompt}
+    if bearer_token:
+        payload["authorization"] = bearer_token
+    if user_id:
+        payload["user_id"] = user_id
+    if response_id:
+        payload["response_id"] = str(response_id).strip()
+    if response_wait_seconds is not None:
+        payload["response_wait_seconds"] = float(response_wait_seconds)
+
+    if agent_arn:
+        escaped_arn = requests.utils.quote(agent_arn, safe="")
+        url = f"https://bedrock-agentcore.{region}.amazonaws.com/runtimes/{escaped_arn}/invocations"
+        headers = {
+            "Content-Type": "application/json",
+            "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id": str(uuid.uuid4()),
+        }
+        if bearer_token:
+            headers["Authorization"] = bearer_token
+
+        response = requests.post(
+            url,
+            params={"qualifier": "DEFAULT"},
+            headers=headers,
+            json=payload,
+            timeout=timeout_seconds,
+        )
+        if response.status_code >= 400:
+            snippet = response.text[:500]
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"AgentCore returned {response.status_code} {response.reason}: {snippet}",
+            )
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="AgentCore returned non-JSON payload",
+            ) from exc
+
+    local_url = os.getenv("AGENTCORE_LOCAL_URL", "http://localhost:8080/invocations")
+    response = requests.post(
+        local_url,
+        headers={"Content-Type": "application/json"},
+        json=payload,
+        timeout=min(timeout_seconds, 60),
+    )
+    response.raise_for_status()
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Local agent returned non-JSON payload",
+        ) from exc
 
 
 def _mojibake_score(text: str) -> float:
@@ -132,24 +228,23 @@ def _invoke_agentcore(
                 citations = payload.get("citations", [])
                 disclaimer = payload.get("disclaimer", "")
                 tool_calls = payload.get("tool_calls", [])
-                response_meta = payload.get("response_meta", {})
-                mode = ""
-                fallback = ""
-                reason_codes = ""
-                if isinstance(response_meta, dict):
-                    mode = str(response_meta.get("mode") or "").strip()
-                    fallback = str(response_meta.get("fallback_used") or "").strip()
-                    raw_reason_codes = response_meta.get("reason_codes")
-                    if isinstance(raw_reason_codes, list):
-                        reason_codes = ", ".join([str(item).strip() for item in raw_reason_codes if str(item).strip()])
+                runtime_meta = _runtime_response_meta(payload)
                 yield _format_sse_data_event(result)
                 yield "data: RuntimeSource: aws_runtime\n\n"
-                if mode:
-                    yield f"data: ResponseMode: {mode}\n\n"
-                if fallback:
-                    yield f"data: ResponseFallback: {fallback}\n\n"
-                if reason_codes:
-                    yield f"data: ResponseReasonCodes: {reason_codes}\n\n"
+                if runtime_meta["mode"]:
+                    yield f"data: ResponseMode: {runtime_meta['mode']}\n\n"
+                if runtime_meta["fallback"]:
+                    yield f"data: ResponseFallback: {runtime_meta['fallback']}\n\n"
+                if runtime_meta["reason_codes"]:
+                    yield f"data: ResponseReasonCodes: {runtime_meta['reason_codes']}\n\n"
+                if runtime_meta["response_status"]:
+                    yield f"data: ResponseStatus: {runtime_meta['response_status']}\n\n"
+                if runtime_meta["response_job_id"]:
+                    yield f"data: ResponseJobId: {runtime_meta['response_job_id']}\n\n"
+                if runtime_meta["retry_after_seconds"] > 0:
+                    yield f"data: RetryAfterSeconds: {runtime_meta['retry_after_seconds']}\n\n"
+                if runtime_meta["executed_tools"]:
+                    yield f"data: ExecutedTools: {runtime_meta['executed_tools']}\n\n"
                 if trace_id:
                     yield f"data: Trace: {trace_id}\n\n"
                 if citations:
@@ -202,22 +297,21 @@ def _invoke_agentcore(
         payload = response.json()
         yield _format_sse_data_event(str(payload.get("result", "")))
         yield "data: RuntimeSource: local_agent\n\n"
-        response_meta = payload.get("response_meta", {})
-        mode = ""
-        fallback = ""
-        reason_codes = ""
-        if isinstance(response_meta, dict):
-            mode = str(response_meta.get("mode") or "").strip()
-            fallback = str(response_meta.get("fallback_used") or "").strip()
-            raw_reason_codes = response_meta.get("reason_codes")
-            if isinstance(raw_reason_codes, list):
-                reason_codes = ", ".join([str(item).strip() for item in raw_reason_codes if str(item).strip()])
-        if mode:
-            yield f"data: ResponseMode: {mode}\n\n"
-        if fallback:
-            yield f"data: ResponseFallback: {fallback}\n\n"
-        if reason_codes:
-            yield f"data: ResponseReasonCodes: {reason_codes}\n\n"
+        runtime_meta = _runtime_response_meta(payload)
+        if runtime_meta["mode"]:
+            yield f"data: ResponseMode: {runtime_meta['mode']}\n\n"
+        if runtime_meta["fallback"]:
+            yield f"data: ResponseFallback: {runtime_meta['fallback']}\n\n"
+        if runtime_meta["reason_codes"]:
+            yield f"data: ResponseReasonCodes: {runtime_meta['reason_codes']}\n\n"
+        if runtime_meta["response_status"]:
+            yield f"data: ResponseStatus: {runtime_meta['response_status']}\n\n"
+        if runtime_meta["response_job_id"]:
+            yield f"data: ResponseJobId: {runtime_meta['response_job_id']}\n\n"
+        if runtime_meta["retry_after_seconds"] > 0:
+            yield f"data: RetryAfterSeconds: {runtime_meta['retry_after_seconds']}\n\n"
+        if runtime_meta["executed_tools"]:
+            yield f"data: ExecutedTools: {runtime_meta['executed_tools']}\n\n"
         yield f"data: Trace: {payload.get('trace_id', '')}\n\n"
         citations = payload.get("citations", [])
         if citations:
@@ -254,3 +348,44 @@ def stream_chat(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.get("/jobs/{response_id}")
+def poll_chat_job(
+    response_id: str,
+    wait_seconds: int = Query(default=8, ge=1, le=30),
+    user=Depends(current_user),
+    authorization: Optional[str] = Header(None),
+):
+    agent_arn = os.getenv("AGENTCORE_RUNTIME_ARN")
+    if agent_arn and not authorization:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing Authorization header for AgentCore Runtime (JWT required).",
+        )
+    try:
+        payload = _invoke_agentcore_json(
+            prompt="",
+            bearer_token=authorization,
+            user_id=user.get("sub") if user else None,
+            response_id=response_id,
+            response_wait_seconds=float(wait_seconds),
+            timeout_seconds=max(20, wait_seconds + 12),
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to poll AgentCore job: {exc}",
+        ) from exc
+
+    response_meta = payload.get("response_meta") if isinstance(payload.get("response_meta"), dict) else {}
+    response_status = str(response_meta.get("response_status") or "").strip().lower() or "failed"
+    return {
+        "status": response_status,
+        "response_id": str(response_meta.get("responses_id") or response_id).strip(),
+        "result": str(payload.get("result") or payload.get("response") or ""),
+        "trace_id": str(payload.get("trace_id") or ""),
+        "tool_calls": payload.get("tool_calls", []),
+        "response_meta": response_meta,
+        "retry_after_seconds": int(response_meta.get("retry_after_seconds") or 0),
+    }

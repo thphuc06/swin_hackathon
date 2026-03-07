@@ -7,6 +7,24 @@ import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
+DEFAULT_GATEWAY_ARN = (
+    "arn:aws:bedrock-agentcore:us-east-1:617287375312:gateway/financial-adviosry-gw-iam-6k02cirh4d"
+)
+DEFAULT_GATEWAY_ENDPOINT = (
+    "https://financial-adviosry-gw-iam-6k02cirh4d.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp"
+)
+BLOCKED_GATEWAY_IDS = {
+    "financial-adviosry-gw-a5f4pembyn",
+    "jars-gw-afejhtqoqd",
+}
+
+
+def _ensure_utf8_console() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 
 def _normalize_gateway_endpoint(value: str) -> str:
     endpoint = (value or "").strip().rstrip("/")
@@ -29,6 +47,63 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _normalize_responses_model_id(value: str) -> str:
+    raw = (value or "").strip()
+    if raw in {"openai.gpt-oss-120b", "openai.gpt-oss-120b-1:0"}:
+        return "openai.gpt-oss-120b"
+    if raw.startswith("openai.gpt-oss-120b"):
+        return "openai.gpt-oss-120b"
+    if raw:
+        return raw
+    return "openai.gpt-oss-120b"
+
+
+def _gateway_id_from_arn(gateway_arn: str) -> str:
+    text = str(gateway_arn or "").strip()
+    if "gateway/" not in text:
+        return ""
+    return text.split("gateway/", 1)[1].strip()
+
+
+def _gateway_id_from_endpoint(gateway_endpoint: str) -> str:
+    endpoint = _normalize_gateway_endpoint(gateway_endpoint)
+    if not endpoint:
+        return ""
+    parsed = urlparse(endpoint)
+    host = str(parsed.hostname or "").strip().lower()
+    if not host:
+        return ""
+    return host.split(".", 1)[0]
+
+
+def _gateway_endpoint_from_arn(gateway_arn: str, region: str) -> str:
+    gateway_id = _gateway_id_from_arn(gateway_arn)
+    if not gateway_id:
+        return ""
+    resolved_region = str(region or "").strip() or "us-east-1"
+    return f"https://{gateway_id}.gateway.bedrock-agentcore.{resolved_region}.amazonaws.com/mcp"
+
+
+def _validate_gateway_config(*, gateway_arn: str, gateway_endpoint: str) -> None:
+    gateway_arn_id = _gateway_id_from_arn(gateway_arn)
+    gateway_endpoint_id = _gateway_id_from_endpoint(gateway_endpoint)
+    if not gateway_arn_id:
+        raise ValueError("DEPLOY_AGENTCORE_GATEWAY_ARN is invalid or missing gateway id")
+    if not gateway_endpoint_id:
+        raise ValueError("DEPLOY_AGENTCORE_GATEWAY_ENDPOINT is invalid or missing gateway id")
+    if gateway_arn_id != gateway_endpoint_id:
+        raise ValueError(
+            "Gateway ARN/endpoint mismatch. "
+            f"ARN id={gateway_arn_id}, endpoint id={gateway_endpoint_id}. "
+            "Unset DEPLOY_AGENTCORE_GATEWAY_ENDPOINT to auto-derive from ARN."
+        )
+    if gateway_arn_id in BLOCKED_GATEWAY_IDS:
+        raise ValueError(
+            f"Blocked legacy gateway id '{gateway_arn_id}'. "
+            f"Use the IAM gateway: {DEFAULT_GATEWAY_ARN}"
+        )
 
 
 def _ensure_backend_base(value: str) -> str:
@@ -69,16 +144,15 @@ def _sync_kb_assets() -> None:
 
 
 def _build_env_vars() -> dict[str, str]:
-    gateway_endpoint = _normalize_gateway_endpoint(
-        os.getenv(
-            "DEPLOY_AGENTCORE_GATEWAY_ENDPOINT",
-            "https://jars-gw-afejhtqoqd.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp",
-        )
+    deploy_region = os.getenv("DEPLOY_AWS_REGION", "us-east-1").strip() or "us-east-1"
+    gateway_arn = os.getenv("DEPLOY_AGENTCORE_GATEWAY_ARN", DEFAULT_GATEWAY_ARN).strip()
+    gateway_endpoint_override = os.getenv("DEPLOY_AGENTCORE_GATEWAY_ENDPOINT", "").strip()
+    gateway_endpoint = (
+        _normalize_gateway_endpoint(gateway_endpoint_override)
+        if gateway_endpoint_override
+        else _gateway_endpoint_from_arn(gateway_arn, deploy_region) or DEFAULT_GATEWAY_ENDPOINT
     )
-    gateway_arn = os.getenv(
-        "DEPLOY_AGENTCORE_GATEWAY_ARN",
-        "arn:aws:bedrock-agentcore:us-east-1:617287375312:gateway/financial-adviosry-gw-a5f4pembyn",
-    ).strip()
+    _validate_gateway_config(gateway_arn=gateway_arn, gateway_endpoint=gateway_endpoint)
     backend_raw = os.getenv("DEPLOY_BACKEND_API_BASE", "")
     skip_backend_base_check = _env_bool("DEPLOY_SKIP_BACKEND_API_BASE_CHECK", False)
     if skip_backend_base_check:
@@ -88,16 +162,44 @@ def _build_env_vars() -> dict[str, str]:
     else:
         backend_api_base = _ensure_backend_base(backend_raw)
     model_id = os.getenv("DEPLOY_BEDROCK_MODEL_ID", "openai.gpt-oss-120b-1:0").strip()
-    return {
-        "AWS_REGION": os.getenv("DEPLOY_AWS_REGION", "us-east-1").strip() or "us-east-1",
+    responses_model_id = _normalize_responses_model_id(
+        os.getenv("DEPLOY_BEDROCK_RESPONSES_MODEL_ID", "openai.gpt-oss-120b")
+    )
+    env_vars = {
+        "AWS_REGION": deploy_region,
         "BEDROCK_MODEL_ID": model_id,
-        "BEDROCK_RESPONSES_MODEL_ID": os.getenv("DEPLOY_BEDROCK_RESPONSES_MODEL_ID", model_id).strip() or model_id,
+        "BEDROCK_RESPONSES_MODEL_ID": responses_model_id,
         "BEDROCK_RESPONSES_BASE_URL": os.getenv(
             "DEPLOY_BEDROCK_RESPONSES_BASE_URL",
-            f"https://bedrock-mantle.{os.getenv('DEPLOY_AWS_REGION', 'us-east-1').strip() or 'us-east-1'}.api.aws/v1",
+            f"https://bedrock-mantle.{deploy_region}.api.aws/v1",
         ).strip(),
         "BEDROCK_RESPONSES_TIMEOUT_SECONDS": os.getenv("DEPLOY_BEDROCK_RESPONSES_TIMEOUT_SECONDS", "120").strip()
         or "120",
+        "BEDROCK_RESPONSES_CREATE_TIMEOUT_SECONDS": os.getenv(
+            "DEPLOY_BEDROCK_RESPONSES_CREATE_TIMEOUT_SECONDS",
+            "25",
+        ).strip()
+        or "25",
+        "BEDROCK_RESPONSES_POLL_READ_TIMEOUT_SECONDS": os.getenv(
+            "DEPLOY_BEDROCK_RESPONSES_POLL_READ_TIMEOUT_SECONDS",
+            "8",
+        ).strip()
+        or "8",
+        "BEDROCK_RESPONSES_POLL_INTERVAL_SECONDS": os.getenv(
+            "DEPLOY_BEDROCK_RESPONSES_POLL_INTERVAL_SECONDS",
+            "1",
+        ).strip()
+        or "1",
+        "BEDROCK_RESPONSES_SYNC_WAIT_SECONDS": os.getenv(
+            "DEPLOY_BEDROCK_RESPONSES_SYNC_WAIT_SECONDS",
+            "15",
+        ).strip()
+        or "15",
+        "BEDROCK_RESPONSES_RETRY_AFTER_SECONDS": os.getenv(
+            "DEPLOY_BEDROCK_RESPONSES_RETRY_AFTER_SECONDS",
+            "2",
+        ).strip()
+        or "2",
         "BEDROCK_RESPONSES_MAX_OUTPUT_TOKENS": os.getenv(
             "DEPLOY_BEDROCK_RESPONSES_MAX_OUTPUT_TOKENS",
             "1200",
@@ -106,13 +208,13 @@ def _build_env_vars() -> dict[str, str]:
         "BEDROCK_RESPONSES_TEMPERATURE": os.getenv("DEPLOY_BEDROCK_RESPONSES_TEMPERATURE", "0.2").strip() or "0.2",
         "BEDROCK_GUARDRAIL_ID": os.getenv(
             "DEPLOY_BEDROCK_GUARDRAIL_ID",
-            "arn:aws:bedrock:us-east-1:021862553142:guardrail-profile/us.guardrail.v1:0",
+            "",
         ).strip(),
         "BEDROCK_GUARDRAIL_VERSION": os.getenv("DEPLOY_BEDROCK_GUARDRAIL_VERSION", "DRAFT").strip() or "DRAFT",
-        "BEDROCK_KB_ID": os.getenv("DEPLOY_BEDROCK_KB_ID", "G6GLWTUKEL").strip(),
-        "BEDROCK_KB_DATASOURCE_ID": os.getenv("DEPLOY_BEDROCK_KB_DATASOURCE_ID", "WTYVWINQP9").strip(),
         "AGENTCORE_GATEWAY_ENDPOINT": gateway_endpoint,
         "AGENTCORE_GATEWAY_ARN": gateway_arn,
+        "AGENTCORE_GATEWAY_SERVER_LABEL": os.getenv("DEPLOY_AGENTCORE_GATEWAY_SERVER_LABEL", "finance_gateway").strip()
+        or "finance_gateway",
         "BACKEND_API_BASE": backend_api_base,
         "USE_LOCAL_MOCKS": "false",
         "TOOL_ORCHESTRATION_MODE": os.getenv("DEPLOY_TOOL_ORCHESTRATION_MODE", "responses_dynamic").strip()
@@ -157,6 +259,14 @@ def _build_env_vars() -> dict[str, str]:
         "ENCODING_REPAIR_MIN_DELTA": os.getenv("DEPLOY_ENCODING_REPAIR_MIN_DELTA", "0.10").strip() or "0.10",
         "ENCODING_NORMALIZATION_FORM": os.getenv("DEPLOY_ENCODING_NORMALIZATION_FORM", "NFC").strip() or "NFC",
     }
+    # Bedrock AgentCore Runtime currently supports <=50 custom environment variables.
+    max_env_vars = 50
+    if len(env_vars) > max_env_vars:
+        raise ValueError(
+            f"Too many environment variables for AgentCore runtime: {len(env_vars)} > {max_env_vars}. "
+            "Trim optional DEPLOY_* values before deploy."
+        )
+    return env_vars
 
 
 def _resolve_agentcore_launch_command(process_env: dict[str, str]) -> list[str]:
@@ -215,6 +325,7 @@ def deploy() -> None:
 
 
 if __name__ == "__main__":
+    _ensure_utf8_console()
     try:
         deploy()
     except Exception as exc:

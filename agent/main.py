@@ -111,7 +111,21 @@ def invoke(payload: Dict[str, Any], context: Any | None = None) -> Dict[str, Any
     auth_result = get_auth_provider().verify(user_token if isinstance(user_token, str) else None)
     user_id = payload.get("user_id", auth_result.subject or "demo-user")
     session_id = _resolve_session_id(payload, context, user_id=str(user_id))
-    result = run_agent(prompt=prompt, user_token=user_token, user_id=user_id, session_id=session_id)
+    response_id = str(payload.get("response_id") or "").strip() or None
+    response_wait_seconds: float | None = None
+    if payload.get("response_wait_seconds") is not None:
+        try:
+            response_wait_seconds = float(payload.get("response_wait_seconds"))
+        except (TypeError, ValueError):
+            response_wait_seconds = None
+    result = run_agent(
+        prompt=prompt,
+        user_token=user_token,
+        user_id=user_id,
+        session_id=session_id,
+        response_id=response_id,
+        response_wait_seconds=response_wait_seconds,
+    )
     response_meta = result.get("response_meta", {}) if isinstance(result.get("response_meta"), dict) else {}
     disclaimer = str(response_meta.get("disclaimer_effective") or DEFAULT_DISCLAIMER)
     return {
