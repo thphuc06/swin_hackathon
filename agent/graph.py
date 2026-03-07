@@ -31,7 +31,6 @@ from policy.engine import get_policy_engine
 from retrieval.factory import get_index_client
 
 from config import (
-    TOOL_ORCHESTRATION_MODE,
     ENCODING_FAILFAST_SCORE_MIN,
     ENCODING_GATE_ENABLED,
     ENCODING_NORMALIZATION_FORM,
@@ -91,7 +90,6 @@ from tools import (
     suitability_guard_tool,
     what_if_scenario_tool,
 )
-from service_responses_dynamic import generate_dynamic_response
 
 logger = logging.getLogger(__name__)
 
@@ -3089,74 +3087,6 @@ def run_agent(prompt: str, user_token: str, user_id: str, session_id: str | None
     trace_id = new_trace_id()
     request_id = new_request_id()
     resolved_session_id = str(session_id or "").strip() or f"{str(user_id or 'demo-user').strip()}:default"
-    if TOOL_ORCHESTRATION_MODE == "responses_dynamic":
-        try:
-            dynamic = generate_dynamic_response(
-                prompt=prompt,
-                user_id=user_id,
-                session_id=resolved_session_id,
-                trace_id=trace_id,
-                request_id=request_id,
-            )
-            tool_calls = dynamic.get("tool_calls", []) if isinstance(dynamic.get("tool_calls"), list) else []
-            tool_chain = ", ".join([str(item).strip() for item in tool_calls if str(item).strip()])
-            response_body = _finalize_response(
-                str(dynamic.get("text") or "").strip(),
-                "",
-                trace_id,
-                tool_chain,
-            )
-            return {
-                "response": response_body,
-                "trace_id": trace_id,
-                "request_id": request_id,
-                "session_id": resolved_session_id,
-                "citations": {"matches": []},
-                "tool_calls": tool_calls,
-                "tool_outputs": {},
-                "agent_outputs": {},
-                "routing_meta": {
-                    "intent": "dynamic",
-                    "extraction": {},
-                    "route_decision": {},
-                    "clarification": {"pending": False, "round": 0, "max_questions": 0},
-                    "encoding_meta": {},
-                    "user_profile": {"risk_appetite": "unknown"},
-                    "selected_agent": "responses_dynamic",
-                    "session_id": resolved_session_id,
-                },
-                "response_meta": {
-                    "mode": "responses_dynamic",
-                    "model_id": str(dynamic.get("model_id") or ""),
-                    "prompt_version": "responses_api_v1",
-                    "schema_version": "responses_api_v1",
-                    "policy_version": RESPONSE_POLICY_VERSION,
-                    "validation_passed": True,
-                    "fallback_used": None,
-                    "used_fact_ids": [],
-                    "used_insight_ids": [],
-                    "used_action_ids": [],
-                    "latency_ms": int(dynamic.get("latency_ms") or 0),
-                    "reason_codes": [],
-                    "disclaimer_effective": DEFAULT_DISCLAIMER,
-                    "encoding_decision": "pass",
-                    "encoding_score": 0.0,
-                    "encoding_repair_applied": False,
-                    "encoding_reason_codes": [],
-                    "encoding_guess": "",
-                    "encoding_input_fingerprint": "",
-                    "tool_errors": {},
-                    "responses_id": str(dynamic.get("response_id") or ""),
-                },
-            }
-        except Exception as exc:
-            logger.warning(
-                "responses_dynamic_failed trace=%s request=%s error=%s; falling back to bundle orchestration",
-                trace_id,
-                request_id,
-                exc,
-            )
-
     graph = build_graph()
     state = graph.invoke(
         {

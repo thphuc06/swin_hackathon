@@ -292,43 +292,24 @@ def _demo_fixed_user_id() -> str:
     return str(os.getenv("FINANCE_MCP_FIXED_USER_ID", "") or "").strip()
 
 
-def _resolve_effective_user_id(user: Dict[str, Any]) -> str:
-    fixed_user_id = _demo_fixed_user_id()
-    if fixed_user_id:
-        return fixed_user_id
-    subject = str(user.get("sub") or "").strip()
-    if subject:
-        return subject
-    raise PermissionError("Authenticated caller is missing subject (sub) claim")
-
-
-def _inject_user_id_from_auth_context(
+def _apply_demo_user_override(
     *,
     user: Dict[str, Any],
     arguments: Dict[str, Any],
     tool_name: str,
 ) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    fixed_user_id = _demo_fixed_user_id()
+    if not fixed_user_id:
+        return user, arguments
     if tool_name not in TOOL_SCHEMAS:
         return user, arguments
-    schema = TOOL_SCHEMAS.get(tool_name) if isinstance(TOOL_SCHEMAS.get(tool_name), dict) else {}
-    properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
-    if "user_id" not in properties:
-        return user, arguments
 
-    effective_user_id = _resolve_effective_user_id(user)
     overridden_user = dict(user)
-    overridden_user["sub"] = effective_user_id
+    overridden_user["sub"] = fixed_user_id
 
     overridden_arguments = dict(arguments)
-    supplied_user_id = str(overridden_arguments.get("user_id") or "").strip()
-    if supplied_user_id and supplied_user_id != effective_user_id:
-        logger.warning(
-            "MCP user_id override: tool=%s supplied_user_id=%s auth_user_id=%s",
-            tool_name,
-            supplied_user_id,
-            effective_user_id,
-        )
-    overridden_arguments["user_id"] = effective_user_id
+    if "user_id" in TOOL_SCHEMAS[tool_name].get("properties", {}):
+        overridden_arguments["user_id"] = fixed_user_id
 
     return overridden_user, overridden_arguments
 
@@ -371,7 +352,7 @@ def mcp_jsonrpc(payload: Dict[str, Any], authorization: str | None = Header(defa
     requested_name = str(params.get("name") or "")
     arguments = params.get("arguments") or {}
     tool_name = _resolve_tool_name(requested_name)
-    user, arguments = _inject_user_id_from_auth_context(user=user, arguments=arguments, tool_name=tool_name)
+    user, arguments = _apply_demo_user_override(user=user, arguments=arguments, tool_name=tool_name)
     auth_context_token = set_auth_context(user)
     logger.info(
         "MCP tool request: tool=%s caller_type=%s client_id=%s",

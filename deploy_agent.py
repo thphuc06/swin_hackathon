@@ -75,10 +75,6 @@ def _build_env_vars() -> dict[str, str]:
             "https://jars-gw-afejhtqoqd.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp",
         )
     )
-    gateway_arn = os.getenv(
-        "DEPLOY_AGENTCORE_GATEWAY_ARN",
-        "arn:aws:bedrock-agentcore:us-east-1:617287375312:gateway/financial-adviosry-gw-a5f4pembyn",
-    ).strip()
     backend_raw = os.getenv("DEPLOY_BACKEND_API_BASE", "")
     skip_backend_base_check = _env_bool("DEPLOY_SKIP_BACKEND_API_BASE_CHECK", False)
     if skip_backend_base_check:
@@ -87,23 +83,10 @@ def _build_env_vars() -> dict[str, str]:
             raise ValueError("DEPLOY_BACKEND_API_BASE must start with http:// or https://")
     else:
         backend_api_base = _ensure_backend_base(backend_raw)
-    model_id = os.getenv("DEPLOY_BEDROCK_MODEL_ID", "openai.gpt-oss-120b-1:0").strip()
+    model_id = os.getenv("DEPLOY_BEDROCK_MODEL_ID", "amazon.nova-pro-v1:0").strip()
     return {
         "AWS_REGION": os.getenv("DEPLOY_AWS_REGION", "us-east-1").strip() or "us-east-1",
         "BEDROCK_MODEL_ID": model_id,
-        "BEDROCK_RESPONSES_MODEL_ID": os.getenv("DEPLOY_BEDROCK_RESPONSES_MODEL_ID", model_id).strip() or model_id,
-        "BEDROCK_RESPONSES_BASE_URL": os.getenv(
-            "DEPLOY_BEDROCK_RESPONSES_BASE_URL",
-            f"https://bedrock-mantle.{os.getenv('DEPLOY_AWS_REGION', 'us-east-1').strip() or 'us-east-1'}.api.aws/v1",
-        ).strip(),
-        "BEDROCK_RESPONSES_TIMEOUT_SECONDS": os.getenv("DEPLOY_BEDROCK_RESPONSES_TIMEOUT_SECONDS", "120").strip()
-        or "120",
-        "BEDROCK_RESPONSES_MAX_OUTPUT_TOKENS": os.getenv(
-            "DEPLOY_BEDROCK_RESPONSES_MAX_OUTPUT_TOKENS",
-            "1200",
-        ).strip()
-        or "1200",
-        "BEDROCK_RESPONSES_TEMPERATURE": os.getenv("DEPLOY_BEDROCK_RESPONSES_TEMPERATURE", "0.2").strip() or "0.2",
         "BEDROCK_GUARDRAIL_ID": os.getenv(
             "DEPLOY_BEDROCK_GUARDRAIL_ID",
             "arn:aws:bedrock:us-east-1:021862553142:guardrail-profile/us.guardrail.v1:0",
@@ -112,11 +95,8 @@ def _build_env_vars() -> dict[str, str]:
         "BEDROCK_KB_ID": os.getenv("DEPLOY_BEDROCK_KB_ID", "G6GLWTUKEL").strip(),
         "BEDROCK_KB_DATASOURCE_ID": os.getenv("DEPLOY_BEDROCK_KB_DATASOURCE_ID", "WTYVWINQP9").strip(),
         "AGENTCORE_GATEWAY_ENDPOINT": gateway_endpoint,
-        "AGENTCORE_GATEWAY_ARN": gateway_arn,
         "BACKEND_API_BASE": backend_api_base,
         "USE_LOCAL_MOCKS": "false",
-        "TOOL_ORCHESTRATION_MODE": os.getenv("DEPLOY_TOOL_ORCHESTRATION_MODE", "responses_dynamic").strip()
-        or "responses_dynamic",
         "LOG_LEVEL": os.getenv("DEPLOY_LOG_LEVEL", "info").strip() or "info",
         "ROUTER_MODE": "semantic_enforce",
         "ROUTER_POLICY_VERSION": os.getenv("DEPLOY_ROUTER_POLICY_VERSION", "v1").strip() or "v1",
@@ -159,26 +139,6 @@ def _build_env_vars() -> dict[str, str]:
     }
 
 
-def _resolve_agentcore_launch_command(process_env: dict[str, str]) -> list[str]:
-    probe = subprocess.run(
-        ["agentcore", "--help"],
-        env=process_env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
-    help_text = (probe.stdout or "").lower()
-    if " launch " in f" {help_text} " or "commands ------------------------------------------------------------------" in help_text:
-        return ["agentcore", "launch"]
-    if " deploy " in f" {help_text} ":
-        return ["agentcore", "deploy"]
-    # Default to modern command.
-    return ["agentcore", "launch"]
-
-
 def deploy() -> None:
     _sync_kb_assets()
     env_vars = _build_env_vars()
@@ -187,14 +147,12 @@ def deploy() -> None:
     for key in sorted(env_vars.keys()):
         print(f"- {key}={_mask_value(key, env_vars[key])}")
 
-    process_env = os.environ.copy()
-    process_env["PYTHONIOENCODING"] = "utf-8"
-    process_env["PYTHONUTF8"] = "1"
-
-    cmd = _resolve_agentcore_launch_command(process_env)
-    cmd.append("--auto-update-on-conflict")
+    cmd = ["agentcore", "deploy", "--auto-update-on-conflict"]
     for key, val in env_vars.items():
         cmd.extend(["--env", f"{key}={val}"])
+
+    process_env = os.environ.copy()
+    process_env["PYTHONIOENCODING"] = "utf-8"
 
     print("\nExecuting agentcore deploy from ./agent ...")
     proc = subprocess.Popen(

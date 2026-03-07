@@ -42,27 +42,11 @@ BEDROCK_GUARDRAIL_VERSION = os.getenv("BEDROCK_GUARDRAIL_VERSION", "DRAFT")
 BEDROCK_KB_ID = ""  # Unused - local KB implementation
 
 AGENTCORE_GATEWAY_ENDPOINT = os.getenv("AGENTCORE_GATEWAY_ENDPOINT", "")
-AGENTCORE_GATEWAY_ARN = os.getenv("AGENTCORE_GATEWAY_ARN", "").strip()
 AGENTCORE_GATEWAY_TOOL_NAME = os.getenv("AGENTCORE_GATEWAY_TOOL_NAME", "")
 AGENTCORE_MEMORY_ID = os.getenv("AGENTCORE_MEMORY_ID", "")
 
 BACKEND_API_BASE = os.getenv("BACKEND_API_BASE", "http://localhost:8010")
 USE_LOCAL_MOCKS = _env_bool("USE_LOCAL_MOCKS", False)
-TOOL_ORCHESTRATION_MODE = os.getenv("TOOL_ORCHESTRATION_MODE", "bundle").strip().lower()
-if TOOL_ORCHESTRATION_MODE not in {"bundle", "responses_dynamic"}:
-    TOOL_ORCHESTRATION_MODE = "bundle"
-BEDROCK_RESPONSES_MODEL_ID = (
-    os.getenv("BEDROCK_RESPONSES_MODEL_ID", "openai.gpt-oss-120b-1:0").strip()
-    or "openai.gpt-oss-120b-1:0"
-)
-BEDROCK_RESPONSES_BASE_URL = (
-    os.getenv("BEDROCK_RESPONSES_BASE_URL", f"https://bedrock-mantle.{AWS_REGION}.api.aws/v1").strip().rstrip("/")
-    or f"https://bedrock-mantle.{AWS_REGION}.api.aws/v1"
-)
-BEDROCK_RESPONSES_API_KEY = os.getenv("BEDROCK_RESPONSES_API_KEY", "").strip()
-BEDROCK_RESPONSES_TIMEOUT_SECONDS = max(10, _env_int("BEDROCK_RESPONSES_TIMEOUT_SECONDS", 120))
-BEDROCK_RESPONSES_MAX_OUTPUT_TOKENS = max(128, _env_int("BEDROCK_RESPONSES_MAX_OUTPUT_TOKENS", 1200))
-BEDROCK_RESPONSES_TEMPERATURE = max(0.0, min(1.0, _env_float("BEDROCK_RESPONSES_TEMPERATURE", 0.2)))
 ROUTER_MODE = os.getenv("ROUTER_MODE", "semantic_enforce").strip().lower()
 if ROUTER_MODE not in {"rule", "semantic_shadow", "semantic_enforce"}:
     ROUTER_MODE = "semantic_enforce"
