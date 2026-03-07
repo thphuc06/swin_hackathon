@@ -7,6 +7,7 @@ from typing import Any, Dict
 from bedrock_agentcore import BedrockAgentCoreApp
 from dotenv import load_dotenv
 
+from config import TOOL_ORCHESTRATION_MODE
 from infra.auth import get_auth_provider
 from graph import run_agent
 from tools import initialize_kb, initialize_tool_registry
@@ -31,20 +32,23 @@ try:
 except Exception as exc:
     logger.error("Startup: KB initialization exception: %s", exc)
 
-# Initialize tool registry at startup (eager loading)
-try:
-    default_token = os.getenv("DEFAULT_USER_TOKEN", "")
-    if default_token:
-        registry_result = initialize_tool_registry(default_token)
-        logger.info(
-            "Startup: Tool registry initialized with %d tools: %s",
-            registry_result.get("count", 0),
-            ", ".join(registry_result.get("tools", [])),
-        )
-    else:
-        logger.warning("Startup: DEFAULT_USER_TOKEN not set, skipping tool registry initialization")
-except Exception as exc:
-    logger.warning("Startup: Tool registry initialization failed: %s (will fall back to lazy loading)", exc)
+# Initialize tool registry at startup (eager loading, bundle mode only)
+if TOOL_ORCHESTRATION_MODE == "bundle":
+    try:
+        default_token = os.getenv("DEFAULT_USER_TOKEN", "")
+        if default_token:
+            registry_result = initialize_tool_registry(default_token)
+            logger.info(
+                "Startup: Tool registry initialized with %d tools: %s",
+                registry_result.get("count", 0),
+                ", ".join(registry_result.get("tools", [])),
+            )
+        else:
+            logger.warning("Startup: DEFAULT_USER_TOKEN not set, skipping tool registry initialization")
+    except Exception as exc:
+        logger.warning("Startup: Tool registry initialization failed: %s (will fall back to lazy loading)", exc)
+else:
+    logger.info("Startup: TOOL_ORCHESTRATION_MODE=%s, skip bundle tool registry init", TOOL_ORCHESTRATION_MODE)
 
 
 def _authorization_from_context(context: Any | None) -> str:
