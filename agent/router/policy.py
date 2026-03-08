@@ -10,7 +10,7 @@ from .contracts import IntentExtractionV1, IntentName, RouteDecisionV1, RouterMo
 
 TOOL_BUNDLE_MAP: dict[IntentName, list[str]] = {
     "summary": ["spend_analytics_v1", "cashflow_forecast_v1", "jar_allocation_suggest_v1"],
-    "risk": ["spend_analytics_v1", "anomaly_signals_v1", "risk_profile_non_investment_v1"],
+    "risk": ["anomaly_signals_v1", "risk_profile_non_investment_v1", "spend_analytics_v1"],
     "planning": [
         "spend_analytics_v1",
         "cashflow_forecast_v1",
@@ -29,8 +29,9 @@ TOOL_BUNDLE_MAP: dict[IntentName, list[str]] = {
 
 
 def _normalize_prompt(prompt: str) -> str:
+    base = str(prompt or "").replace("đ", "d").replace("Đ", "D")
     stripped = "".join(
-        ch for ch in unicodedata.normalize("NFD", str(prompt or "")) if unicodedata.category(ch) != "Mn"
+        ch for ch in unicodedata.normalize("NFD", base) if unicodedata.category(ch) != "Mn"
     )
     return stripped.lower()
 
@@ -141,6 +142,17 @@ def suggest_intent_override(prompt: str, extraction: IntentExtractionV1) -> tupl
         "suspicious transaction",
         "unrecognized transaction",
     ]
+    risk_priority_terms = [
+        "danh gia rui ro",
+        "rui ro dong tien",
+        "canh bao",
+        "bat thuong",
+        "anomaly",
+        "volatility",
+        "runway",
+        "risk assessment",
+        "cashflow risk",
+    ]
     planning_home_goal_terms = [
         "mua nha",
         "mua can ho",
@@ -217,6 +229,9 @@ def suggest_intent_override(prompt: str, extraction: IntentExtractionV1) -> tupl
 
     if _contains_any(normalized, anomaly_terms) and not has_invest_terms:
         return "risk", "intent_override:anomaly_to_risk"
+
+    if extraction.intent in {"summary", "planning"} and _contains_any(normalized, risk_priority_terms) and not has_invest_terms:
+        return "risk", "intent_override:risk_priority_keywords"
 
     if _contains_any(normalized, savings_deposit_terms) and not has_invest_terms:
         return "planning", "intent_override:savings_deposit_to_planning"

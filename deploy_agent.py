@@ -7,6 +7,13 @@ import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
+DEFAULT_GATEWAY_ARN = (
+    "arn:aws:bedrock-agentcore:us-east-1:617287375312:gateway/financial-adviosry-gw-a5f4pembyn"
+)
+DEFAULT_GATEWAY_ENDPOINT = (
+    "https://financial-adviosry-gw-a5f4pembyn.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp"
+)
+
 
 def _normalize_gateway_endpoint(value: str) -> str:
     endpoint = (value or "").strip().rstrip("/")
@@ -29,6 +36,21 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _gateway_id_from_arn(gateway_arn: str) -> str:
+    text = str(gateway_arn or "").strip()
+    if "gateway/" not in text:
+        return ""
+    return text.split("gateway/", 1)[1].strip()
+
+
+def _gateway_endpoint_from_arn(gateway_arn: str, region: str) -> str:
+    gateway_id = _gateway_id_from_arn(gateway_arn)
+    if not gateway_id:
+        return ""
+    resolved_region = str(region or "").strip() or "us-east-1"
+    return f"https://{gateway_id}.gateway.bedrock-agentcore.{resolved_region}.amazonaws.com/mcp"
 
 
 def _ensure_backend_base(value: str) -> str:
@@ -69,11 +91,13 @@ def _sync_kb_assets() -> None:
 
 
 def _build_env_vars() -> dict[str, str]:
-    gateway_endpoint = _normalize_gateway_endpoint(
-        os.getenv(
-            "DEPLOY_AGENTCORE_GATEWAY_ENDPOINT",
-            "https://jars-gw-afejhtqoqd.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp",
-        )
+    deploy_region = os.getenv("DEPLOY_AWS_REGION", "us-east-1").strip() or "us-east-1"
+    gateway_arn = os.getenv("DEPLOY_AGENTCORE_GATEWAY_ARN", DEFAULT_GATEWAY_ARN).strip()
+    gateway_endpoint_override = os.getenv("DEPLOY_AGENTCORE_GATEWAY_ENDPOINT", "").strip()
+    gateway_endpoint = (
+        _normalize_gateway_endpoint(gateway_endpoint_override)
+        if gateway_endpoint_override
+        else _gateway_endpoint_from_arn(gateway_arn, deploy_region) or DEFAULT_GATEWAY_ENDPOINT
     )
     backend_raw = os.getenv("DEPLOY_BACKEND_API_BASE", "")
     skip_backend_base_check = _env_bool("DEPLOY_SKIP_BACKEND_API_BASE_CHECK", False)
@@ -83,18 +107,19 @@ def _build_env_vars() -> dict[str, str]:
             raise ValueError("DEPLOY_BACKEND_API_BASE must start with http:// or https://")
     else:
         backend_api_base = _ensure_backend_base(backend_raw)
-    model_id = os.getenv("DEPLOY_BEDROCK_MODEL_ID", "amazon.nova-pro-v1:0").strip()
+    model_id = os.getenv("DEPLOY_BEDROCK_MODEL_ID", "global.anthropic.claude-sonnet-4-5-20250929-v1:0").strip()
     return {
-        "AWS_REGION": os.getenv("DEPLOY_AWS_REGION", "us-east-1").strip() or "us-east-1",
+        "AWS_REGION": deploy_region,
         "BEDROCK_MODEL_ID": model_id,
         "BEDROCK_GUARDRAIL_ID": os.getenv(
             "DEPLOY_BEDROCK_GUARDRAIL_ID",
-            "arn:aws:bedrock:us-east-1:021862553142:guardrail-profile/us.guardrail.v1:0",
+            "arn:aws:bedrock:us-east-1:617287375312:guardrail/nrcwizhaa0gk",
         ).strip(),
         "BEDROCK_GUARDRAIL_VERSION": os.getenv("DEPLOY_BEDROCK_GUARDRAIL_VERSION", "DRAFT").strip() or "DRAFT",
         "BEDROCK_KB_ID": os.getenv("DEPLOY_BEDROCK_KB_ID", "G6GLWTUKEL").strip(),
         "BEDROCK_KB_DATASOURCE_ID": os.getenv("DEPLOY_BEDROCK_KB_DATASOURCE_ID", "WTYVWINQP9").strip(),
         "AGENTCORE_GATEWAY_ENDPOINT": gateway_endpoint,
+        "AGENTCORE_GATEWAY_ARN": gateway_arn,
         "BACKEND_API_BASE": backend_api_base,
         "USE_LOCAL_MOCKS": "false",
         "LOG_LEVEL": os.getenv("DEPLOY_LOG_LEVEL", "info").strip() or "info",
@@ -111,7 +136,7 @@ def _build_env_vars() -> dict[str, str]:
         or "answer_plan_v2",
         "RESPONSE_POLICY_VERSION": os.getenv("DEPLOY_RESPONSE_POLICY_VERSION", "advice_policy_v1").strip()
         or "advice_policy_v1",
-        "RESPONSE_MAX_RETRIES": os.getenv("DEPLOY_RESPONSE_MAX_RETRIES", "0").strip() or "0",
+        "RESPONSE_MAX_RETRIES": os.getenv("DEPLOY_RESPONSE_MAX_RETRIES", "1").strip() or "1",
         # Dynamic service matching v2
         "SERVICE_MATCHER_MODE": os.getenv("DEPLOY_SERVICE_MATCHER_MODE", "dynamic_v2").strip() or "dynamic_v2",
         "SERVICE_CATALOG_TTL_SECONDS": os.getenv("DEPLOY_SERVICE_CATALOG_TTL_SECONDS", "300").strip() or "300",
@@ -147,14 +172,17 @@ def deploy() -> None:
     for key in sorted(env_vars.keys()):
         print(f"- {key}={_mask_value(key, env_vars[key])}")
 
-    cmd = ["agentcore", "deploy", "--auto-update-on-conflict"]
+    cmd = ["agentcore", "launch", "--auto-update-on-conflict"]
     for key, val in env_vars.items():
         cmd.extend(["--env", f"{key}={val}"])
 
     process_env = os.environ.copy()
     process_env["PYTHONIOENCODING"] = "utf-8"
+    process_env["PYTHONUTF8"] = "1"
+    process_env["RICH_NO_EMOJI"] = "1"
+    process_env["NO_COLOR"] = "1"
 
-    print("\nExecuting agentcore deploy from ./agent ...")
+    print("\nExecuting agentcore launch from ./agent ...")
     proc = subprocess.Popen(
         cmd,
         cwd="agent",

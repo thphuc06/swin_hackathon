@@ -28,6 +28,13 @@ PROMPT_VERSION = "intent_extractor_v1"
 _bedrock_client = None
 _guardrail_warning_emitted = False
 
+
+def _truncate_for_log(text: str, limit: int = 320) -> str:
+    payload = str(text or "").strip().replace("\n", "\\n")
+    if len(payload) <= limit:
+        return payload
+    return f"{payload[:limit]}..."
+
 def _get_bedrock_client():
     global _bedrock_client
     if _bedrock_client is None:
@@ -73,55 +80,106 @@ def _build_prompt(user_prompt: str) -> str:
     )
 
 
-def _extract_text_from_converse_payload(payload: Dict[str, Any]) -> str:
+def _extract_text_from_converse_payload(payload: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
     output = payload.get("output") or {}
     message = output.get("message") or {}
     content = message.get("content") or []
     texts: list[str] = []
+    reasoning_texts: list[str] = []
     if isinstance(content, list):
         for item in content:
-            if isinstance(item, dict) and isinstance(item.get("text"), str):
+            if not isinstance(item, dict):
+                continue
+            if isinstance(item.get("text"), str):
                 texts.append(item["text"])
-    return "\n".join(texts).strip()
+            reasoning_content = item.get("reasoningContent")
+            if isinstance(reasoning_content, dict):
+                reasoning_text = (reasoning_content.get("reasoningText") or {}).get("text")
+                if isinstance(reasoning_text, str):
+                    reasoning_texts.append(reasoning_text)
+    meta = {
+        "content_items": len(content) if isinstance(content, list) else 0,
+        "text_items": len(texts),
+        "reasoning_items": len(reasoning_texts),
+    }
+    if texts:
+        return "\n".join(texts).strip(), meta
+    if reasoning_texts:
+        logger.warning("Intent extraction received reasoningContent-only response; using reasoningText fallback.")
+        return "\n".join(reasoning_texts).strip(), meta
+    return "", meta
 
 
 def _try_parse_json(raw_text: str) -> Dict[str, Any] | None:
-    text = (raw_text or "").strip()
+    text = _normalize_json_text(raw_text or "")
     if not text:
         return None
-    try:
-        parsed = json.loads(text)
-        return parsed if isinstance(parsed, dict) else None
-    except json.JSONDecodeError:
-        pass
+
+    direct = _load_json_candidate(text)
+    if isinstance(direct, dict):
+        return direct
 
     fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, flags=re.DOTALL | re.IGNORECASE)
     if fenced:
-        try:
-            parsed = json.loads(fenced.group(1))
-            return parsed if isinstance(parsed, dict) else None
-        except json.JSONDecodeError:
-            return None
+        parsed = _load_json_candidate(fenced.group(1))
+        if isinstance(parsed, dict):
+            return parsed
 
     start = text.find("{")
     end = text.rfind("}")
     if start < 0 or end <= start:
         return None
     candidate = text[start : end + 1]
-    try:
-        parsed = json.loads(candidate)
-        return parsed if isinstance(parsed, dict) else None
-    except json.JSONDecodeError:
+    parsed = _load_json_candidate(candidate)
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _normalize_json_text(text: str) -> str:
+    normalized = str(text or "").strip().lstrip("\ufeff")
+    replacements = {
+        "\u201c": "\"",
+        "\u201d": "\"",
+        "\u2018": "'",
+        "\u2019": "'",
+    }
+    for source, target in replacements.items():
+        normalized = normalized.replace(source, target)
+    normalized = re.sub(r"^\s*json\s*[:\-]?\s*", "", normalized, flags=re.IGNORECASE)
+    return normalized.strip()
+
+
+def _load_json_candidate(text: str) -> Dict[str, Any] | None:
+    candidate = _normalize_json_text(text)
+    if not candidate:
         return None
 
+    candidates = [candidate, re.sub(r",(\s*[}\]])", r"\1", candidate)]
+    for item in candidates:
+        try:
+            parsed = json.loads(item)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+        if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
+            return parsed[0]
+        if isinstance(parsed, str):
+            try:
+                nested = json.loads(parsed)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(nested, dict):
+                return nested
+    return None
 
-def _invoke_bedrock_converse(prompt: str, *, model_id: str) -> str:
+
+def _invoke_bedrock_converse(prompt: str, *, model_id: str) -> tuple[str, Dict[str, Any]]:
     client = _get_bedrock_client()
     logger.debug("Invoking Bedrock converse for intent extraction (model=%s)", model_id)
     request: Dict[str, Any] = {
         "modelId": model_id,
         "messages": [{"role": "user", "content": [{"text": prompt}]}],
-        "inferenceConfig": {"temperature": 0.0, "topP": 0.01, "maxTokens": 400},
+        "inferenceConfig": {"temperature": 0.0, "maxTokens": 900},
     }
     guardrail_id = str(BEDROCK_GUARDRAIL_ID or "").strip()
     guardrail_version = str(BEDROCK_GUARDRAIL_VERSION or "DRAFT").strip() or "DRAFT"
@@ -140,7 +198,16 @@ def _invoke_bedrock_converse(prompt: str, *, model_id: str) -> str:
     response = client.converse(
         **request,
     )
-    return _extract_text_from_converse_payload(response)
+    text, payload_meta = _extract_text_from_converse_payload(response)
+    usage = response.get("usage") if isinstance(response, dict) else {}
+    invoke_meta = {
+        "stop_reason": str(response.get("stopReason") or ""),
+        "input_tokens": int((usage or {}).get("inputTokens") or 0),
+        "output_tokens": int((usage or {}).get("outputTokens") or 0),
+        "total_tokens": int((usage or {}).get("totalTokens") or 0),
+        **payload_meta,
+    }
+    return text, invoke_meta
 
 
 def _sanitize_extraction_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -198,6 +265,7 @@ def extract_intent_with_bedrock(
         "guardrail_enabled": bool(str(BEDROCK_GUARDRAIL_ID or "").strip()),
         "guardrail_id": str(BEDROCK_GUARDRAIL_ID or "").strip(),
         "guardrail_version": str(BEDROCK_GUARDRAIL_VERSION or "DRAFT").strip() or "DRAFT",
+        "attempt_meta": [],
     }
     resolved_model = (model_id or BEDROCK_MODEL_ID or "").strip()
 
@@ -212,8 +280,9 @@ def extract_intent_with_bedrock(
     for attempt in range(retry_attempts + 1):
         runtime_meta["attempt"] = attempt + 1
         try:
-            raw_text = _invoke_bedrock_converse(prompt_text, model_id=resolved_model)
+            raw_text, invoke_meta = _invoke_bedrock_converse(prompt_text, model_id=resolved_model)
             runtime_meta["raw_text"] = raw_text
+            runtime_meta["attempt_meta"].append({"attempt": attempt + 1, **invoke_meta})
         except Exception as exc:  # pragma: no cover - runtime/network path
             errors.append(f"bedrock_invoke_error:{type(exc).__name__}")
             logger.warning("Intent extraction invoke failed on attempt %s: %s", attempt + 1, exc)
@@ -221,6 +290,15 @@ def extract_intent_with_bedrock(
 
         payload = _try_parse_json(raw_text)
         if payload is None:
+            logger.warning(
+                "intent_json_parse_failed attempt=%s stop_reason=%s output_tokens=%s preview=%s",
+                attempt + 1,
+                str(invoke_meta.get("stop_reason") or ""),
+                int(invoke_meta.get("output_tokens") or 0),
+                _truncate_for_log(raw_text),
+            )
+            if str(invoke_meta.get("stop_reason") or "").strip().lower() == "max_tokens":
+                errors.append("intent_output_truncated_max_tokens")
             errors.append("invalid_json")
             continue
         payload = _sanitize_extraction_payload(payload)

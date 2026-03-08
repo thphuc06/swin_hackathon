@@ -27,6 +27,13 @@ DEFAULT_DISCLAIMER = "Educational guidance only. We do not provide investment ad
 _FACT_PLACEHOLDER_PATTERN = re.compile(r"\[F:([a-zA-Z0-9._-]+)\]")
 _NON_FACT_PLACEHOLDER_PATTERN = re.compile(r"\[(?:A|I):[^\]]+\]")
 
+
+def _truncate_for_log(text: str, limit: int = 360) -> str:
+    payload = str(text or "").strip().replace("\n", "\\n")
+    if len(payload) <= limit:
+        return payload
+    return f"{payload[:limit]}..."
+
 # Boto3 client cache with timeout config
 _bedrock_client = None
 _guardrail_warning_emitted = False
@@ -169,16 +176,34 @@ def _build_prompt(
     )
 
 
-def _extract_text_from_converse_payload(payload: Dict[str, Any]) -> str:
+def _extract_text_from_converse_payload(payload: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
     output = payload.get("output") or {}
     message = output.get("message") or {}
     content = message.get("content") or []
     texts: list[str] = []
+    reasoning_texts: list[str] = []
     if isinstance(content, list):
         for item in content:
-            if isinstance(item, dict) and isinstance(item.get("text"), str):
+            if not isinstance(item, dict):
+                continue
+            if isinstance(item.get("text"), str):
                 texts.append(item["text"])
-    return "\n".join(texts).strip()
+            reasoning_content = item.get("reasoningContent")
+            if isinstance(reasoning_content, dict):
+                reasoning_text = (reasoning_content.get("reasoningText") or {}).get("text")
+                if isinstance(reasoning_text, str):
+                    reasoning_texts.append(reasoning_text)
+    meta = {
+        "content_items": len(content) if isinstance(content, list) else 0,
+        "text_items": len(texts),
+        "reasoning_items": len(reasoning_texts),
+    }
+    if texts:
+        return "\n".join(texts).strip(), meta
+    if reasoning_texts:
+        logger.warning("Answer synthesis received reasoningContent-only response; using reasoningText fallback.")
+        return "\n".join(reasoning_texts).strip(), meta
+    return "", meta
 
 
 def _try_parse_json(raw_text: str) -> Dict[str, Any] | None:
@@ -244,13 +269,13 @@ def _load_json_candidate(text: str) -> Dict[str, Any] | None:
     return None
 
 
-def _invoke_bedrock_converse(prompt: str, *, model_id: str) -> str:
+def _invoke_bedrock_converse(prompt: str, *, model_id: str) -> tuple[str, Dict[str, Any]]:
     client = _get_bedrock_client()
     logger.debug("Invoking Bedrock converse for answer synthesis (model=%s)", model_id)
     request: Dict[str, Any] = {
         "modelId": model_id,
         "messages": [{"role": "user", "content": [{"text": prompt}]}],
-        "inferenceConfig": {"temperature": 0.0, "topP": 0.01, "maxTokens": 900},
+        "inferenceConfig": {"temperature": 0.0, "maxTokens": 2200},
     }
     guardrail_id = str(BEDROCK_GUARDRAIL_ID or "").strip()
     guardrail_version = str(BEDROCK_GUARDRAIL_VERSION or "DRAFT").strip() or "DRAFT"
@@ -267,7 +292,16 @@ def _invoke_bedrock_converse(prompt: str, *, model_id: str) -> str:
             )
             _guardrail_warning_emitted = True
     response = client.converse(**request)
-    return _extract_text_from_converse_payload(response)
+    text, payload_meta = _extract_text_from_converse_payload(response)
+    usage = response.get("usage") if isinstance(response, dict) else {}
+    invoke_meta = {
+        "stop_reason": str(response.get("stopReason") or ""),
+        "input_tokens": int((usage or {}).get("inputTokens") or 0),
+        "output_tokens": int((usage or {}).get("outputTokens") or 0),
+        "total_tokens": int((usage or {}).get("totalTokens") or 0),
+        **payload_meta,
+    }
+    return text, invoke_meta
 
 
 def _dedupe_keep_order(items: Iterable[str]) -> list[str]:
@@ -1139,6 +1173,7 @@ def synthesize_answer_plan_with_bedrock(
         "guardrail_id": str(BEDROCK_GUARDRAIL_ID or "").strip(),
         "guardrail_version": str(BEDROCK_GUARDRAIL_VERSION or "DRAFT").strip() or "DRAFT",
         "raw_text": "",
+        "attempt_meta": [],
     }
     _ = allowed_numeric_tokens
     resolved_model = (model_id or BEDROCK_MODEL_ID or "").strip()
@@ -1163,8 +1198,9 @@ def synthesize_answer_plan_with_bedrock(
     for attempt in range(retry_attempts + 1):
         runtime_meta["attempt"] = attempt + 1
         try:
-            raw_text = _invoke_bedrock_converse(prompt_text, model_id=resolved_model)
+            raw_text, invoke_meta = _invoke_bedrock_converse(prompt_text, model_id=resolved_model)
             runtime_meta["raw_text"] = raw_text
+            runtime_meta["attempt_meta"].append({"attempt": attempt + 1, **invoke_meta})
         except Exception as exc:  # pragma: no cover - runtime/network path
             errors.append(f"bedrock_invoke_error:{type(exc).__name__}")
             logger.warning("Answer synthesis invoke failed on attempt %s: %s", attempt + 1, exc)
@@ -1172,6 +1208,15 @@ def synthesize_answer_plan_with_bedrock(
 
         payload = _try_parse_json(raw_text)
         if payload is None:
+            logger.warning(
+                "answer_json_parse_failed attempt=%s stop_reason=%s output_tokens=%s preview=%s",
+                attempt + 1,
+                str(invoke_meta.get("stop_reason") or ""),
+                int(invoke_meta.get("output_tokens") or 0),
+                _truncate_for_log(raw_text),
+            )
+            if str(invoke_meta.get("stop_reason") or "").strip().lower() == "max_tokens":
+                errors.append("answer_output_truncated_max_tokens")
             errors.append("answer_invalid_json")
             continue
 
@@ -1188,6 +1233,14 @@ def synthesize_answer_plan_with_bedrock(
         )
         schema_errors = validate_answer_plan_payload(payload)
         if schema_errors:
+            logger.warning(
+                "answer_schema_validation_failed attempt=%s stop_reason=%s output_tokens=%s preview=%s errors=%s",
+                attempt + 1,
+                str(invoke_meta.get("stop_reason") or ""),
+                int(invoke_meta.get("output_tokens") or 0),
+                _truncate_for_log(raw_text),
+                schema_errors[:3],
+            )
             errors.append("answer_invalid_schema")
             errors.extend([f"schema:{msg}" for msg in schema_errors[:3]])
             continue

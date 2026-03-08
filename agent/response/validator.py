@@ -13,6 +13,7 @@ _FACT_PLACEHOLDER_PATTERN = re.compile(r"\[F:([a-zA-Z0-9._-]+)\]")
 _NUMERIC_TOKEN_PATTERN = re.compile(r"[-+]?\d[\d,\.]*%?")
 _LIST_MARKER_PATTERN = re.compile(r"^\s*\d+[\.\)]\s+")
 _NUMERIC_CANONICAL_SCALE = 1_000_000
+_SOFT_OPERATIONAL_INTS = {2, 3, 4, 7, 10, 14, 21, 30, 45, 60, 90}
 
 
 def _extract_numeric_tokens(text: str) -> set[str]:
@@ -77,8 +78,11 @@ def _is_soft_ungrounded_token(token: str) -> bool:
     text = str(token or "").strip()
     has_pct = text.endswith("%")
 
-    # Soft tolerances for operational cadence/ordinal numbers in advisory prose.
-    if has_pct and absolute <= 25:
+    # Soft tolerances for small adjustment percentages in advisory prose.
+    if has_pct and absolute <= 30:
+        return True
+    # Soft tolerances for common cadence windows (days/weeks/month checkpoints).
+    if not has_pct and float(int(absolute)) == absolute and int(absolute) in _SOFT_OPERATIONAL_INTS:
         return True
     if not has_pct and float(int(absolute)) == absolute and absolute <= 31:
         return True

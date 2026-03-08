@@ -212,25 +212,230 @@ def _augment_prompt_with_session_memory(prompt: str, session_memory: Dict[str, A
         return prompt
     last_intent = str(session_memory.get("last_intent") or "").strip().lower()
     last_risk = str(session_memory.get("last_risk_appetite") or "").strip().lower()
-    turns = session_memory.get("turns") if isinstance(session_memory.get("turns"), list) else []
-    latest_turn = turns[-1] if turns else {}
-    if not isinstance(latest_turn, dict):
-        latest_turn = {}
-    prev_prompt = _truncate_text(latest_turn.get("prompt"), limit=160)
-    prev_response = _truncate_text(latest_turn.get("response_preview"), limit=180)
     context_lines: list[str] = []
     if last_intent:
         context_lines.append(f"last_intent={last_intent}")
     if last_risk:
         context_lines.append(f"last_risk_appetite={last_risk}")
-    if prev_prompt:
-        context_lines.append(f"last_prompt={prev_prompt}")
-    if prev_response:
-        context_lines.append(f"last_response={prev_response}")
     if not context_lines:
         return prompt
     context_text = " | ".join(context_lines)
     return f"[SESSION_CONTEXT] {context_text}\n[CURRENT_QUERY] {prompt}"
+
+
+def _strip_accents(value: str) -> str:
+    base = str(value or "").replace("đ", "d").replace("Đ", "D")
+    text = unicodedata.normalize("NFD", base)
+    return "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
+
+
+def _normalize_option_text(value: str) -> str:
+    normalized = _strip_accents(str(value or "")).lower()
+    normalized = re.sub(r"[^a-z0-9 ]+", " ", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _parse_option_index(prompt: str, options: list[str]) -> int:
+    normalized = _normalize_option_text(prompt)
+    if not normalized:
+        return 0
+
+    digit_match = re.fullmatch(r"(?:lua chon|chon|option)?\s*([1-9])", normalized)
+    if digit_match:
+        value = _safe_int(digit_match.group(1), 0)
+        if 1 <= value <= max(1, len(options)):
+            return value
+
+    word_to_index = {"mot": 1, "hai": 2, "ba": 3}
+    if normalized in word_to_index and word_to_index[normalized] <= max(1, len(options)):
+        return word_to_index[normalized]
+
+    normalized_options = [_normalize_option_text(item) for item in options]
+    for idx, option_text in enumerate(normalized_options, start=1):
+        if not option_text:
+            continue
+        if normalized == option_text or normalized in option_text:
+            return idx
+    return 0
+
+
+def _parse_scenario_horizon_answer(prompt: str, options: list[str]) -> int:
+    option_idx = _parse_option_index(prompt, options)
+    if option_idx == 1:
+        return 3
+    if option_idx == 2:
+        return 6
+    if option_idx == 3:
+        return 12
+
+    normalized = _normalize_option_text(prompt)
+    if not normalized:
+        return 0
+    if re.search(r"\b3\s*(thang|month|months|m)\b", normalized):
+        return 3
+    if re.search(r"\b6\s*(thang|month|months|m)\b", normalized):
+        return 6
+    if re.search(r"\b12\s*(thang|month|months|m)\b", normalized):
+        return 12
+    return 0
+
+
+def _resolve_pending_clarification_answer(
+    state: AgentState,
+    *,
+    prompt: str,
+    clarify_round: int,
+    max_clarify: int,
+    effective_mode: str,
+) -> bool:
+    session_memory = state.get("session_memory", {}) if isinstance(state.get("session_memory"), dict) else {}
+    pending = session_memory.get("pending_clarification")
+    if not isinstance(pending, dict) or not pending:
+        return False
+
+    question_id = str(pending.get("question_id") or "").strip().lower()
+    if question_id != "scenario_horizon":
+        return False
+
+    options_raw = pending.get("options")
+    options = [str(item).strip() for item in options_raw if str(item).strip()] if isinstance(options_raw, list) else []
+    if not options:
+        options = ["3 tháng", "6 tháng", "12 tháng"]
+
+    horizon_months = _parse_scenario_horizon_answer(prompt, options)
+    if horizon_months <= 0:
+        normalized_prompt = _normalize_option_text(prompt)
+        if normalized_prompt and len(normalized_prompt) <= 16:
+            state["clarification"] = {
+                "pending": True,
+                "round": min(max_clarify, clarify_round + 1),
+                "max_questions": max_clarify,
+                "question": {
+                    "question_id": "scenario_horizon",
+                    "question_text": str(
+                        pending.get("question_text") or "Bạn muốn phân tích kịch bản trong khoảng thời gian nào?"
+                    ),
+                    "options": options,
+                    "max_questions": max_clarify,
+                },
+            }
+            state["route_decision"] = {
+                "mode": effective_mode if effective_mode in {"semantic_shadow", "semantic_enforce"} else "semantic_enforce",
+                "policy_version": ROUTER_POLICY_VERSION,
+                "final_intent": "scenario",
+                "tool_bundle": [],
+                "clarify_needed": True,
+                "reason_codes": ["clarification_answer_unrecognized", "scenario_horizon_missing"],
+                "fallback_used": None,
+                "source": "semantic",
+            }
+            state["intent"] = "scenario"
+            _append_response_reason_codes(state, ["clarification_answer_unrecognized"])
+            return True
+        return False
+
+    slots = pending.get("extraction_slots")
+    slots_payload = dict(slots) if isinstance(slots, dict) else {}
+    slots_payload["horizon_months"] = horizon_months
+
+    risk_appetite = _resolve_risk_appetite(prompt=str(prompt), slots=slots_payload)
+    if risk_appetite == "unknown":
+        session_risk = str(session_memory.get("last_risk_appetite") or "").strip().lower()
+        if session_risk in {"conservative", "moderate", "aggressive"}:
+            risk_appetite = session_risk
+    if risk_appetite != "unknown":
+        slots_payload["risk_appetite"] = risk_appetite
+    state["user_profile"] = {"risk_appetite": risk_appetite}
+
+    mode_value = effective_mode if effective_mode in {"semantic_shadow", "semantic_enforce"} else "semantic_enforce"
+    reason_codes = ["clarification_answer_resolved", "scenario_horizon_from_clarification"]
+    pending_reason_codes = pending.get("reason_codes")
+    if isinstance(pending_reason_codes, list):
+        reason_codes.extend([str(code).strip() for code in pending_reason_codes if str(code).strip()])
+
+    state["extraction"] = {
+        "schema_version": "intent_extraction_v1",
+        "intent": "scenario",
+        "sub_intent": "clarification_resolved",
+        "confidence": 1.0,
+        "domain_relevance": 1.0,
+        "top2": [
+            {"intent": "scenario", "score": 1.0},
+            {"intent": "planning", "score": 0.0},
+        ],
+        "slots": slots_payload,
+        "scenario_confidence": 1.0,
+        "reason": "clarification_resolved",
+        "meta": {
+            "clarification_resolved": True,
+            "question_id": "scenario_horizon",
+            "answer_raw": str(prompt or "").strip(),
+        },
+        "errors": [],
+    }
+    state["route_decision"] = RouteDecisionV1(
+        mode=mode_value,
+        policy_version=ROUTER_POLICY_VERSION,
+        final_intent="scenario",
+        tool_bundle=tool_bundle_for_intent("scenario"),
+        clarify_needed=False,
+        reason_codes=sorted(set(reason_codes)),
+        fallback_used=None,
+        source="semantic",
+    ).model_dump()
+    state["intent"] = "scenario"
+    state["clarification"] = {
+        "pending": False,
+        "round": clarify_round,
+        "max_questions": max_clarify,
+        "resolved": {
+            "question_id": "scenario_horizon",
+            "horizon_months": horizon_months,
+        },
+    }
+    pending_scenario_request = pending.get("scenario_request")
+    scenario_fallback = pending_scenario_request if isinstance(pending_scenario_request, dict) else {}
+    state["scenario_request"] = _build_scenario_request_from_slots(slots_payload, scenario_fallback)
+    _append_response_reason_codes(state, ["clarification_answer_resolved", "scenario_horizon_from_clarification"])
+    logger.info(
+        "Clarification resolved from session: question_id=scenario_horizon horizon_months=%s trace=%s",
+        horizon_months,
+        state.get("trace_id"),
+    )
+    return True
+
+
+def _heuristic_intent_from_prompt(prompt: str) -> str | None:
+    text = str(prompt or "").strip().lower()
+    if not text:
+        return None
+    text_ascii = _strip_accents(text)
+    flat = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9% ]+", " ", text_ascii)).strip()
+
+    scenario_markers = ("neu", "gia su", "what if", "what-if", "if i", "ra sao", "how would", "what would")
+    delta_markers = ("giam", "tang", "delta", "%", "pct", "thay doi", "reduce", "increase", "cut")
+    risk_markers = ("rui ro", "risk", "canh bao", "warning", "anomaly", "bat thuong")
+    planning_markers = ("ke hoach", "muc tieu", "tiet kiem", "goal", "plan", "feasibility")
+    summary_markers = ("summary", "overview", "tom tat", "tong quan", "spending", "cashflow", "chi tieu")
+
+    has_scenario = any(marker in flat for marker in scenario_markers)
+    has_delta = any(marker in flat for marker in delta_markers)
+    if not has_scenario and "%" in text and ("ra sao" in flat or "thay" in flat):
+        has_scenario = True
+        has_delta = True
+    if has_scenario and has_delta:
+        return "scenario"
+
+    if any(marker in flat for marker in risk_markers):
+        return "risk"
+    if any(marker in flat for marker in planning_markers):
+        return "planning"
+    if any(marker in flat for marker in summary_markers):
+        return "summary"
+    # Last-resort summary for mojibake-like prompts that keep day window and spend hints.
+    if re.search(r"\b(30|60|90)\b", flat) and ("chi" in flat or "spend" in flat):
+        return "summary"
+    return None
 
 
 def _tool_retry_count(tool_result: Dict[str, Any] | Exception | None) -> int:
@@ -1736,6 +1941,15 @@ def intent_router(state: AgentState) -> AgentState:
     if ROUTER_MODE == "rule":
         logger.warning("ROUTER_MODE=rule is deprecated for runtime path; forcing semantic_enforce.")
 
+    if _resolve_pending_clarification_answer(
+        state,
+        prompt=prompt,
+        clarify_round=clarify_round,
+        max_clarify=max_clarify,
+        effective_mode=effective_mode,
+    ):
+        return state
+
     state["scenario_request"] = {}
     state["clarification"] = {"pending": False, "round": clarify_round, "max_questions": max_clarify}
     state["extraction"] = {}
@@ -1754,6 +1968,33 @@ def intent_router(state: AgentState) -> AgentState:
     extraction, extraction_errors, extraction_meta = extract_intent_with_bedrock(prompt_for_extraction, retry_attempts=1)
     if extraction is None:
         fallback_reason_codes = [*extraction_errors, "structured_invalid_no_rule_fallback"]
+        heuristic_intent = _heuristic_intent_from_prompt(prompt)
+        if heuristic_intent is not None:
+            recovered = RouteDecisionV1(
+                mode=effective_mode if effective_mode in {"semantic_shadow", "semantic_enforce"} else "semantic_enforce",
+                policy_version=ROUTER_POLICY_VERSION,
+                final_intent=heuristic_intent,
+                tool_bundle=tool_bundle_for_intent(heuristic_intent),
+                clarify_needed=False,
+                reason_codes=[*fallback_reason_codes, "intent_heuristic_recovery"],
+                fallback_used="structured_invalid_heuristic_recovery",
+                source="semantic",
+            )
+            state["route_decision"] = recovered.model_dump()
+            state["intent"] = heuristic_intent
+            state["extraction"] = {
+                "errors": extraction_errors,
+                "meta": extraction_meta,
+                "heuristic_intent": heuristic_intent,
+            }
+            if heuristic_intent == "scenario":
+                state["scenario_request"] = _build_scenario_request_from_slots({}, {})
+            logger.warning(
+                "Semantic extraction failed; recovered with heuristic intent=%s errors=%s",
+                heuristic_intent,
+                extraction_errors,
+            )
+            return state
         fallback = RouteDecisionV1(
             mode=effective_mode if effective_mode in {"semantic_shadow", "semantic_enforce"} else "semantic_enforce",
             policy_version=ROUTER_POLICY_VERSION,
@@ -2949,6 +3190,35 @@ def _build_session_memory_payload(state: AgentState) -> Dict[str, Any]:
     }
     turns.append(next_turn)
     turns = turns[-SESSION_MEMORY_MAX_TURNS:]
+    clarification_state = state.get("clarification", {}) if isinstance(state.get("clarification"), dict) else {}
+    pending_question = (
+        clarification_state.get("question")
+        if isinstance(clarification_state.get("question"), dict)
+        else {}
+    )
+    extraction_slots = {}
+    extraction_payload = state.get("extraction", {}) if isinstance(state.get("extraction"), dict) else {}
+    if isinstance(extraction_payload.get("slots"), dict):
+        extraction_slots = extraction_payload.get("slots") or {}
+    pending_clarification: Dict[str, Any] = {}
+    if bool(clarification_state.get("pending")) and pending_question:
+        options = pending_question.get("options") if isinstance(pending_question.get("options"), list) else []
+        pending_clarification = {
+            "question_id": str(pending_question.get("question_id") or "").strip().lower(),
+            "question_text": str(pending_question.get("question_text") or "").strip(),
+            "options": [str(item).strip() for item in options if str(item).strip()],
+            "intent_hint": str(state.get("intent") or "").strip().lower(),
+            "reason_codes": [
+                str(code).strip()
+                for code in (state.get("route_decision") or {}).get("reason_codes", [])
+                if str(code).strip()
+            ]
+            if isinstance(state.get("route_decision"), dict)
+            else [],
+            "extraction_slots": extraction_slots,
+            "scenario_request": state.get("scenario_request", {}) if isinstance(state.get("scenario_request"), dict) else {},
+            "updated_at": _utc_now_iso(),
+        }
     payload: Dict[str, Any] = {
         "schema_version": "session_memory_v1",
         "updated_at": _utc_now_iso(),
@@ -2967,6 +3237,7 @@ def _build_session_memory_payload(state: AgentState) -> Dict[str, Any]:
             if isinstance(state.get("route_decision"), dict)
             else {}
         ),
+        "pending_clarification": pending_clarification,
         "turns": turns,
     }
     redacted_payload = _redact_memory_value(payload)
