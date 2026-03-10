@@ -149,13 +149,54 @@ sequenceDiagram
 | `finance-tools-mcp` | deterministic finance tools | No | N/A |
 | `market-data-mcp` | prices, news, search, crawling, external data | No | N/A |
 
+## Gateway Boundary Clarification
+
+The intended boundary in this repo is:
+
+- `orchestrator -> AgentCore Gateway -> specialist-agent-mcp`
+- `specialist-agent-mcp -> planner-agent -> finance-tools-mcp`
+- `specialist-agent-mcp -> planner-agent -> kb-retrieval-mcp`
+
+Important clarification:
+
+- AgentCore Gateway is the preferred north-south entrypoint for the top-level orchestrator.
+- A specialist such as `planner-agent` does not need to call back through AgentCore Gateway for every internal raw tool call.
+- For this repo, the default internal shape should be direct service-to-service calls from specialists to raw MCP planes, using private networking and service auth.
+- Avoid a recursive path like `orchestrator -> gateway -> specialist-agent-mcp -> gateway -> finance-tools-mcp` unless you explicitly need centralized mediation for that inner hop.
+
+Use inner-hop Gateway only if you need one of these:
+
+- centralized policy enforcement on every specialist raw-tool call
+- dynamic target discovery without specialist config
+- endpoint abstraction so specialists never know raw service URLs
+- a single audit/control point that outweighs the extra hop and complexity
+
+Otherwise, prefer direct internal calls because they reduce:
+
+- latency
+- prefix and registry complexity
+- trace ambiguity
+- the risk of accidental tool recursion
+
+## AWS Implementation Caveats
+
+The architecture is compatible with current AWS guidance, but these implementation details matter:
+
+- AgentCore Gateway is a single MCP-compatible access point that can expose multiple targets, including remote MCP servers.
+- When you register `specialist-agent-mcp` or any other MCP server behind Gateway, Gateway discovers tools from `tools/list` and maintains its own catalog.
+- If the MCP server changes its tools or schemas later, call `SynchronizeGatewayTargets` so Gateway refreshes its indexed catalog.
+- Gateway-exposed tool names are target-prefixed. Per current AgentCore docs, the visible MCP name format is `${target_name}__${tool_name}` and application code should account for that.
+- For MCP server targets, Gateway outbound authorization currently supports `OAuth2` or `NoAuth`; design production paths around machine-to-machine OAuth rather than assuming IAM auth for that hop.
+- AgentCore Runtime also supports `A2A` for true agent-to-agent communication and discovery. For this repo, `MCP` is still the better fit today because the orchestrator wants specialist capabilities to look like typed tools.
+
 ## Recommended AWS and Service Mapping
 
 | Layer | Recommended implementation |
 | --- | --- |
 | Orchestrator | AgentCore Runtime HTTP app |
 | Specialist agent plane | Custom MCP server, for example `src/aws-specialist-agent-mcp-server/` |
-| External tool connectivity | AgentCore Gateway in front of `specialist-agent-mcp` and any other MCP or OpenAPI targets |
+| North-south tool connectivity | AgentCore Gateway in front of `specialist-agent-mcp` and any other public-facing MCP or OpenAPI targets |
+| East-west specialist connectivity | direct MCP or HTTP between private services by default; add another gateway hop only if you need centralized mediation |
 | Finance tool plane | existing finance MCP server |
 | Stock specialist | existing Dexter Bun server, called by `run_stock_agent_v1` |
 | Planner implementation | Python service or shared package called by `run_planner_agent_v1` |
@@ -301,6 +342,30 @@ Output:
 - citations
 - warnings
 
+## Current Repo State vs Target
+
+As of 2026-03-10, this repo is partially aligned with the target architecture but has not completed the specialist-agent migration yet.
+
+| Target element | Current repo status | Evidence in repo | Notes |
+| --- | --- | --- | --- |
+| One top-level orchestrator | Partially implemented | `agent/orchestrator/graph_builder.py`, `agent/graph.py` | The phase-oriented graph exists, but most orchestration and execution logic still lives in `agent/graph.py`. |
+| Finance MCP as separate raw tool plane | Implemented | `src/aws-finance-mcp-server/` | Finance tools are already a standalone MCP service. |
+| Gateway-based top-level tool execution | Implemented | `agent/tools.py` | Runtime tool wrappers resolve tools from `tools/list` and call `tools/call` through AgentCore Gateway. |
+| KB retrieval MCP as separate plane | Implemented but not default runtime path | `src/aws-kb-retrieval-server/`, `agent/tools.py` | The KB MCP exists, but current runtime defaults to local KB loading and local retrieval. |
+| Stock specialist as separate service | Partially implemented | `agent/agents/stock_agent_client.py`, `agent/router/policy.py`, `agent/graph.py` | A stock external HTTP service exists behind `stock_agent_external_v1`, but it is still feature-flagged and selected by a hardcoded branch. |
+| Specialist-agent MCP plane | Not implemented yet | no `src/aws-specialist-agent-mcp-server/` directory | This is the main missing piece for the migration. |
+| Agent catalog for specialist selection | Not implemented yet | no `agent/subagents/catalog.py` or `agent_catalog.yaml` | Current repo has a service catalog for banking product matching, not an agent catalog for specialist delegation. |
+| Orchestrator delegates to specialist tools | Not implemented yet | `agent/graph.py` `decision_engine`, `_execute_tool_safe` | The orchestrator still executes finance tool wrappers directly. |
+| Planner owns raw tool strategy | Not implemented yet | `agent/router/policy.py`, `agent/graph.py` | Tool bundle selection still happens at top-level routing. |
+| Direct MCP pattern for internal callers | Already present in repo | `workers/mcp_client.py` | This is a valid implementation pattern to reuse when `planner-agent` needs to call `finance-tools-mcp` directly. |
+
+Practical reading of the current repo:
+
+- today the repo is still a bundle-router orchestrator with one optional external stock branch
+- finance tooling is already cleanly separated as MCP
+- KB retrieval MCP exists, but the runtime currently uses local KB by default
+- the next architectural step is to add `specialist-agent-mcp`, not to move all raw tool logic into Gateway
+
 ## Migration Plan
 
 ### Phase 0: freeze contracts before moving code
@@ -329,6 +394,10 @@ Implementation notes:
 
 - `run_stock_agent_v1` calls the existing Dexter Bun server over HTTP
 - `run_planner_agent_v1` can initially call shared Python planner code to reduce migration risk
+- `run_planner_agent_v1` should normally call `finance-tools-mcp` and optional retrieval services directly over private service auth, not bounce back through AgentCore Gateway
+- if the team later wants centralized mediation for inner hops, treat that as an explicit tradeoff, not as a default requirement
+- when `specialist-agent-mcp` is exposed through Gateway as an MCP server target, plan for target synchronization after tool/schema changes
+- design Gateway -> `specialist-agent-mcp` auth as M2M OAuth if you want a hardened production path
 
 Success criteria:
 
@@ -379,10 +448,19 @@ to:
 
 - `orchestrator -> planner agent -> raw finance tools`
 
+Recommended default topology for this repo:
+
+- `orchestrator -> AgentCore Gateway -> specialist-agent-mcp -> planner-agent -> finance-tools-mcp`
+
+Optional topology only when justified:
+
+- `orchestrator -> AgentCore Gateway -> specialist-agent-mcp -> planner-agent -> internal gateway -> finance-tools-mcp`
+
 Success criteria:
 
 - planner owns planning-domain tool strategy
 - orchestrator owns delegation strategy only
+- planner is not forced into a recursive Gateway hop unless there is a clear policy or networking reason
 
 ### Phase 4: add observability per delegation hop
 
