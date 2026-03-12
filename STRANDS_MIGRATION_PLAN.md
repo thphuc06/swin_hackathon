@@ -46,6 +46,53 @@ Recommended target:
 
 Do not convert the top-level orchestrator into a free-form autonomous tool loop. Keep top-level routing, safety, memory, audit, and delegation deterministic. Use model-assisted tool selection inside planner, not across the entire platform.
 
+### Important Deployment Clarification
+
+In this document, `planner-agent` describes a logical specialist boundary first, not automatically a separate deployment.
+
+Recommended first deployment shape:
+
+- host `specialist-agent-mcp` on AgentCore Runtime
+- expose `run_planner_agent_v1` and `run_stock_agent_v1` from that MCP server
+- let `run_planner_agent_v1` call planner code in-process inside `specialist-agent-mcp`
+- let `run_stock_agent_v1` remain a thin wrapper around the existing App Runner stock service
+
+This means the initial shape can be:
+
+```text
+AgentCore Runtime Orchestrator
+-> AgentCore Gateway
+-> specialist-agent-mcp on AgentCore Runtime
+   -> run_planner_agent_v1 -> planner package/module in the same workload -> finance-tools-mcp
+   -> run_stock_agent_v1   -> existing stock HTTPS service on App Runner
+```
+
+Only split planner into its own deployment later if you need independent scale, ownership, reuse, or a distinct protocol surface.
+
+Suggested first package layout:
+
+```text
+src/aws-specialist-agent-mcp-server/
+  app/
+    main.py
+    mcp.py
+    tools/
+      run_planner_agent.py
+      run_stock_agent.py
+  planner_agent/
+    contracts.py
+    agent.py
+    tool_router.py
+  stock/
+    client.py
+```
+
+Interpretation:
+
+- the MCP wrapper and planner package live in one AgentCore Runtime deployment unit
+- planner is in-process behind `run_planner_agent_v1`
+- stock remains an external HTTP dependency behind `run_stock_agent_v1`
+
 ### Current Architecture
 
 Current runtime behavior in this repo is effectively:
@@ -69,7 +116,7 @@ Frontend
 -> AgentCore Runtime Orchestrator
 -> AgentCore Gateway
 -> specialist-agent-mcp
-   -> run_planner_agent_v1 -> planner specialist -> finance-tools-mcp / retrieval / future market tools
+   -> run_planner_agent_v1 -> planner specialist (in-process first, separate service optional) -> finance-tools-mcp / retrieval / future market tools
    -> run_stock_agent_v1   -> existing stock HTTPS service on App Runner
 ```
 
@@ -80,8 +127,8 @@ Recommended framework ownership:
 | Service | Target implementation |
 | --- | --- |
 | `orchestrator-runtime` | Strands Graph on AgentCore Runtime |
-| `specialist-agent-mcp` | Thin custom MCP server, not a reasoning-heavy agent |
-| `planner-agent` | Strands specialist |
+| `specialist-agent-mcp` | Thin custom MCP server on AgentCore Runtime in the recommended first rollout, not a reasoning-heavy agent |
+| `planner-agent` | Strands specialist implemented as an in-process package first, or a separate service later if justified |
 | `stock-agent` | Existing HTTPS service, unchanged |
 | `finance-tools-mcp` | Existing MCP server, unchanged |
 
@@ -115,6 +162,7 @@ Strands is compatible with AgentCore Runtime and Gateway. AWS changes are mostly
 | Area | Required change | Why |
 | --- | --- | --- |
 | AgentCore Runtime | Redeploy orchestrator image with Strands-based runtime code | Framework implementation changes live in the runtime container |
+| Specialist MCP runtime | Deploy `specialist-agent-mcp` to AgentCore Runtime in the recommended first rollout | This is the cleanest way to expose planner and stock wrappers as first-party specialist tools |
 | Runtime dependencies | Add Strands packages and remove no-longer-needed orchestration dependencies | The runtime code changes from LangGraph-centric to Strands-centric |
 | Gateway target config | Register `specialist-agent-mcp` if not already present in the final architecture | Required by the target specialist-as-tool design |
 
@@ -201,11 +249,18 @@ Responsibilities:
 
 - expose stable MCP tool contracts
 - validate request schema
-- forward planner calls to planner specialist
+- invoke planner logic either in-process or via a separate planner service
 - forward stock calls to the existing App Runner stock service
 - return structured outputs and error envelopes
 
 Do not turn this layer into a second orchestrator.
+
+Recommended first implementation:
+
+- host `specialist-agent-mcp` on AgentCore Runtime
+- keep planner as a package/module inside that workload for the first migration step
+- keep stock as an external HTTP dependency behind `run_stock_agent_v1`
+- postpone a separate planner deployment until there is a clear operational reason
 
 #### 5. Finance MCP Plane
 
@@ -424,7 +479,9 @@ Deliverables:
 
 - thin MCP server exposing `run_planner_agent_v1`
 - thin MCP server exposing `run_stock_agent_v1`
+- runtime packaging for `specialist-agent-mcp` on AgentCore Runtime
 - stock wrapper forwarding to the existing App Runner HTTPS server
+- initial in-process planner package behind `run_planner_agent_v1`
 
 Success criteria:
 
@@ -435,7 +492,7 @@ Success criteria:
 
 Deliverables:
 
-- Strands-based planner service or package
+- Strands-based planner package or service
 - planner contract adapters
 - planner-owned tool selection for finance MCP
 
@@ -478,11 +535,13 @@ Deliverables:
 - AgentCore traces enabled
 - Strands hook mapping
 - per-hop correlation fields propagated
+- explicit instrumentation for any external specialist or downstream tool service that stays outside AgentCore Runtime
 
 Success criteria:
 
 - specialist invocation paths are easy to debug
 - planner tool usage is visible without reading mixed logs from unrelated layers
+- runtime-hosted specialist MCP is visible in AgentCore observability, while external stock and other downstream services remain trace-correlated through custom instrumentation
 
 #### Phase 6: Cleanup And Hardening
 
@@ -506,6 +565,7 @@ Main risks:
 - duplicating memory ownership between orchestrator and planner
 - making `specialist-agent-mcp` too smart and turning it into another orchestrator
 - schema drift between orchestrator, specialist MCP, planner, and finance tools
+- creating an unnecessary separate planner deployment too early and paying extra complexity without clear isolation benefits
 
 ### Guardrails
 
@@ -513,6 +573,7 @@ Main risks:
 - keep stock unchanged in this migration
 - keep `specialist-agent-mcp` thin
 - keep planner as the owner of planning-domain raw tools
+- keep planner in-process inside `specialist-agent-mcp` until a real reason appears to split it out
 - keep memory and audit at orchestrator
 - keep versioned schemas everywhere
 - keep delegation depth shallow

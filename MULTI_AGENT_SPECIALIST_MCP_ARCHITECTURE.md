@@ -48,7 +48,7 @@ flowchart LR
         SGW[Gateway endpoint]
     end
 
-    subgraph SAMCP[specialist-agent-mcp]
+    subgraph SAMCP[AgentCore Runtime recommended: specialist-agent-mcp]
         T1[run_planner_agent_v1]
         T2[run_stock_agent_v1]
         T3[run_news_research_agent_v1 future]
@@ -63,7 +63,7 @@ flowchart LR
         SEARCH[search and crawling services future]
     end
 
-    subgraph PLANNER[Planner agent service]
+    subgraph PLANNER[Planner core or planner service]
         PCORE[planning and cashflow logic]
         PKB[local KB or retrieval layer]
     end
@@ -108,7 +108,7 @@ sequenceDiagram
     participant Orch as Orchestrator Runtime
     participant Gateway as AgentCore Gateway
     participant AgentMCP as specialist-agent-mcp
-    participant Planner as Planner agent
+    participant Planner as Planner core or service
     participant Finance as finance-tools-mcp
     participant Stock as Dexter stock server
 
@@ -117,7 +117,7 @@ sequenceDiagram
     Orch->>Orch: intake, route, policy, build delegation plan
     Orch->>Gateway: tools/list or tools/call
     Gateway->>AgentMCP: run_planner_agent_v1
-    AgentMCP->>Planner: invoke planner
+    AgentMCP->>Planner: invoke planner core
     Planner->>Finance: spend, forecast, goal, risk tools
     Finance-->>Planner: finance outputs
     Planner-->>AgentMCP: PlannerResult
@@ -138,6 +138,22 @@ sequenceDiagram
     BFF-->>User: final answer
 ```
 
+## Terminology And Hosting Model
+
+This repo uses four concepts that are easy to blur together. Keep them separate:
+
+- `AgentCore Runtime` is where your code runs. It can host an orchestrator, an MCP server, or another agent/tool workload.
+- `AgentCore Gateway` is the north-south entrypoint that exposes targets as typed tools. It is not where specialist business logic lives.
+- `MCP server` is a protocol surface that exposes `tools/list` and `tools/call`. It can run on AgentCore Runtime or on another host such as App Runner.
+- `agent-as-tool` means the orchestrator sees a specialist through one typed tool contract. The specialist implementation behind that tool can be in-process code, a runtime-hosted MCP server, or an external service.
+
+Important clarification for this document:
+
+- `planner-agent` is primarily a logical boundary, not automatically a separate deployment unit.
+- A good first implementation is to host `specialist-agent-mcp` on AgentCore Runtime and let `run_planner_agent_v1` call planner code in-process.
+- `stock-agent` already exists as an external App Runner service, so `run_stock_agent_v1` should remain a thin HTTP wrapper around that service.
+- Split planner into its own deployment only when you need independent scaling, ownership, reuse, or a distinct protocol surface.
+
 ## Service Boundaries
 
 | Service | Primary responsibility | Should it own user conversation state? | Should it choose raw tools? |
@@ -149,13 +165,18 @@ sequenceDiagram
 | `finance-tools-mcp` | deterministic finance tools | No | N/A |
 | `market-data-mcp` | prices, news, search, crawling, external data | No | N/A |
 
+Practical note:
+
+- In the first rollout, `planner-agent` can be an in-process planner package inside `specialist-agent-mcp`.
+- `stock-agent` remains an external service even if `specialist-agent-mcp` is hosted on AgentCore Runtime.
+
 ## Gateway Boundary Clarification
 
 The intended boundary in this repo is:
 
 - `orchestrator -> AgentCore Gateway -> specialist-agent-mcp`
-- `specialist-agent-mcp -> planner-agent -> finance-tools-mcp`
-- `specialist-agent-mcp -> planner-agent -> kb-retrieval-mcp`
+- `specialist-agent-mcp -> planner-core (in-process or separate service) -> finance-tools-mcp`
+- `specialist-agent-mcp -> planner-core (in-process or separate service) -> kb-retrieval-mcp`
 
 Important clarification:
 
@@ -194,14 +215,66 @@ The architecture is compatible with current AWS guidance, but these implementati
 | Layer | Recommended implementation |
 | --- | --- |
 | Orchestrator | AgentCore Runtime HTTP app |
-| Specialist agent plane | Custom MCP server, for example `src/aws-specialist-agent-mcp-server/` |
+| Specialist agent plane | Custom MCP server, for example `src/aws-specialist-agent-mcp-server/`, hosted on AgentCore Runtime as the recommended first step |
 | North-south tool connectivity | AgentCore Gateway in front of `specialist-agent-mcp` and any other public-facing MCP or OpenAPI targets |
 | East-west specialist connectivity | direct MCP or HTTP between private services by default; add another gateway hop only if you need centralized mediation |
 | Finance tool plane | existing finance MCP server |
 | Stock specialist | existing Dexter Bun server, called by `run_stock_agent_v1` |
-| Planner implementation | Python service or shared package called by `run_planner_agent_v1` |
+| Planner implementation | shared Python package or in-process Strands module called by `run_planner_agent_v1`; promote to a separate service only when justified |
 | Session memory and audit | keep at orchestrator |
 | Policy | keep top-level policy at orchestrator; optional extra domain checks inside specialists |
+
+## Recommended First Deployment Shape
+
+For this repo, the simplest high-signal starting point is:
+
+- `orchestrator-runtime` hosted on AgentCore Runtime
+- `specialist-agent-mcp` hosted on AgentCore Runtime
+- `run_planner_agent_v1` calling planner code in-process inside `specialist-agent-mcp`
+- `run_stock_agent_v1` forwarding over HTTP to the existing stock service on App Runner
+- `finance-tools-mcp` remaining a separate MCP plane
+
+That shape keeps the top-level orchestration clean, avoids an unnecessary extra planner deployment, and improves observability for the specialist MCP workload without forcing a stock rewrite.
+
+Only promote planner to its own deployment if at least one of these becomes true:
+
+- planner needs independent scaling or rollout cadence
+- planner must be reused by more than one caller
+- planner needs a separate ownership boundary
+- planner needs to become a first-class agent with its own protocol surface, rather than just a tool behind MCP
+
+## Suggested Code Structure
+
+Recommended first repo shape for `specialist-agent-mcp`:
+
+```text
+src/aws-specialist-agent-mcp-server/
+  app/
+    main.py
+    mcp.py
+    tools/
+      run_planner_agent.py
+      run_stock_agent.py
+  planner_core/
+    contracts.py
+    agent.py
+    tool_router.py
+    prompts.py
+  stock/
+    client.py
+  requirements.txt
+  Dockerfile
+```
+
+Reading this structure:
+
+- `app/mcp.py` exposes `tools/list` and `tools/call`.
+- `app/tools/run_planner_agent.py` is the MCP wrapper for `run_planner_agent_v1`.
+- `planner_core/` holds the real planner logic and stays in the same deployment unit for the first rollout.
+- `app/tools/run_stock_agent.py` is only a wrapper that calls the external stock service over HTTP.
+- this whole directory is built and deployed as one AgentCore Runtime workload.
+
+This keeps the protocol surface thin while avoiding an unnecessary extra planner deployment in phase 1.
 
 ## Core Design Rules
 
@@ -393,7 +466,8 @@ Initial tools:
 Implementation notes:
 
 - `run_stock_agent_v1` calls the existing Dexter Bun server over HTTP
-- `run_planner_agent_v1` can initially call shared Python planner code to reduce migration risk
+- `specialist-agent-mcp` should be hosted on AgentCore Runtime in the recommended first rollout
+- `run_planner_agent_v1` can initially call shared Python planner code in-process to reduce migration risk
 - `run_planner_agent_v1` should normally call `finance-tools-mcp` and optional retrieval services directly over private service auth, not bounce back through AgentCore Gateway
 - if the team later wants centralized mediation for inner hops, treat that as an explicit tradeoff, not as a default requirement
 - when `specialist-agent-mcp` is exposed through Gateway as an MCP server target, plan for target synchronization after tool/schema changes
@@ -450,11 +524,11 @@ to:
 
 Recommended default topology for this repo:
 
-- `orchestrator -> AgentCore Gateway -> specialist-agent-mcp -> planner-agent -> finance-tools-mcp`
+- `orchestrator -> AgentCore Gateway -> specialist-agent-mcp -> planner-core -> finance-tools-mcp`
 
 Optional topology only when justified:
 
-- `orchestrator -> AgentCore Gateway -> specialist-agent-mcp -> planner-agent -> internal gateway -> finance-tools-mcp`
+- `orchestrator -> AgentCore Gateway -> specialist-agent-mcp -> planner-core -> internal gateway -> finance-tools-mcp`
 
 Success criteria:
 
@@ -474,6 +548,11 @@ Add trace fields at every boundary:
 - `latency_ms`
 - `reason_codes`
 - `fallback_used`
+
+Important observability rule:
+
+- Runtime-hosted workloads such as `orchestrator-runtime` and a runtime-hosted `specialist-agent-mcp` benefit from AgentCore-native observability for that workload boundary.
+- External services such as the App Runner stock specialist do not become fully visible automatically; they still need their own instrumentation and trace-context propagation if you want deep end-to-end tracing.
 
 Success criteria:
 
