@@ -26,7 +26,7 @@ This is why Service Agent matters:
 - Planner Agent explains the user's finances.
 - Service Agent designs the user's journey.
 - Stock Agent explains investment or equity-specific questions.
-- Orchestrator routes and synthesizes specialist outputs.
+- Orchestrator routes, validates, and only synthesizes when needed.
 
 The best product interpretation is:
 
@@ -175,7 +175,7 @@ Orchestrator remains responsible for:
 - composing planner, service, and stock outputs when needed
 - preserving traceability, policy, and final response shaping
 
-Orchestrator should not become the place where roadmap logic or financial journey design lives.
+Orchestrator should not become the place where roadmap logic or financial journey design lives, and it should not paraphrase structured Service Agent output when a pass-through contract is enough.
 
 ## Core Mission
 
@@ -227,6 +227,103 @@ The user should hear:
 
 That is the product promise of Service Agent.
 
+## Current Data Reality And Minimal Schema
+
+This design should reflect the current hackathon reality of the repo and database.
+
+### What The System Already Has
+
+- Planner can already derive a large amount of useful financial state from existing finance data.
+- Goal data exists conceptually, but goal timing and maturity-related fields are still thin.
+- Personal profile depth is limited; risk profile is clearer than a rich personal-profile model.
+
+### What Is Still Thin
+
+- some goals may not yet carry enough timing information for roadmap maturity logic
+- achieved and post-maturity timestamps are not guaranteed to exist
+- user profile data is not rich enough to justify a large profile-driven design
+
+### Minimal Goal Fields Needed For Roadmap Support
+
+For hackathon scope, the database should keep only the minimum goal facts that roadmap generation truly needs:
+
+- `goal_type`
+- `target_amount`
+- `target_date` or `target_timeline_months`
+- `priority`
+
+Useful but optional additions:
+
+- `status`
+- `achieved_at`
+
+### Design Principle
+
+Do not overbuild the database for Service Agent.
+
+The roadmap engine should not depend on:
+
+- a full personal profile store
+- dozens of new columns
+- a large service-product catalog
+
+Instead, the system should:
+
+- keep persistent facts minimal
+- derive state from Planner wherever possible
+- add only the smallest schema changes that materially improve roadmap quality
+
+This is the right tradeoff for a hackathon and for the current repo reality.
+
+## Planner-Derived State First
+
+Service Agent should follow one core rule:
+
+**Prefer derived state from Planner over new database dependencies whenever possible.**
+
+### Why This Matters
+
+Planner already has access to the user's grounded financial state and can compute many values that are more useful than raw profile fields.
+
+That means Service Agent does not need to wait for a large user-profile schema to become useful.
+
+### Facts That Should Usually Stay In DB
+
+- goal type
+- target amount
+- target date or target timeline
+- priority
+- optional goal status
+- optional achieved timestamp
+
+### State That Should Usually Come From Planner
+
+- income stability
+- liquidity pressure
+- planning readiness
+- anomaly state
+- savings capacity
+- runway
+- feasibility
+- readiness for next phase
+- recurring burden
+- current pace vs required pace
+
+### Design Principle
+
+```text
+DB
+-> stores minimum durable facts
+
+Planner
+-> derives structured financial state
+
+Service Agent
+-> consumes derived state to design roadmap
+```
+
+This keeps the hackathon scope realistic and avoids unnecessary schema work.
+
 ## Inputs
 
 Service Agent should consume structured inputs, not rely on re-parsing prose when structured planner output is available.
@@ -240,10 +337,13 @@ Service Agent should consume structured inputs, not rely on re-parsing prose whe
 - net cashflow
 - savings capacity
 - emergency runway or buffer
+- liquidity pressure
 - recurring obligations
 - anomaly flags
 - non-investment risk signals
 - planning readiness
+- feasibility
+- readiness for next phase
 - suitability boundary if present
 
 #### 2. User Goals
@@ -355,6 +455,70 @@ If data is insufficient, the same structure should still be returned with explic
 
 - `insufficient_data`
 - `not_applicable`
+
+## Orchestrator Behavior By Output Type
+
+This section is important for implementation clarity.
+
+Orchestrator should not treat every specialist output the same way.
+
+### 1. Planner Output
+
+Planner output is often analytical and finance-heavy.
+
+For Planner output, orchestrator may still need to:
+
+- synthesize
+- summarize
+- merge planning facts into a user-facing response
+- convert analytical output into clearer presentation when the frontend expects prose or mixed UI
+
+Planner output is the place where orchestrator reasoning is most justified.
+
+### 2. Service Output
+
+Service output should be treated differently.
+
+Service Agent should return a structured roadmap contract that is already product-shaped and UI-ready enough to render directly.
+
+For Service output, orchestrator should primarily:
+
+- route
+- validate
+- preserve correlation and trace metadata
+- pass through the structured contract
+- merge only the smallest amount of extra context when truly necessary
+
+Orchestrator should **not**:
+
+- paraphrase the roadmap from text
+- re-reason phase logic from prose
+- flatten structured roadmap output back into generic summary text
+
+### 3. Stock Output
+
+Stock output should be merged only when relevant to the user request.
+
+For Stock output, orchestrator may:
+
+- include it when investing context is part of the user journey
+- attach market context to a larger response when needed
+- keep it separate when the product surface expects a dedicated investing block
+
+### Practical Rule
+
+```text
+Planner output
+-> may require synthesis
+
+Service output
+-> should be pass-through structured contract
+
+Stock output
+-> merge only when relevant
+```
+
+This keeps Service Agent useful as a roadmap engine instead of turning it into another text-only advisory layer.
 
 ## Personalized Roadmap Design
 
@@ -1184,6 +1348,55 @@ The contract should make frontend rendering obvious.
 - visualization should be derivable directly from structured roadmap output
 - the same roadmap should render consistently across demo screens and future product surfaces
 
+## Frontend Rendering Model
+
+Frontend should render Service Agent roadmap output directly from structured fields whenever possible.
+
+The target rendering model is:
+
+```text
+Planner
+-> structured financial state
+
+Service Agent
+-> structured roadmap contract
+
+Orchestrator
+-> pass-through or minimal merge
+
+Frontend
+-> direct roadmap rendering
+```
+
+### Rendering Principles
+
+- frontend should not depend on orchestrator paraphrasing Service output into prose
+- frontend should read UI-ready fields from Service Agent output
+- visualization is a render layer over structured roadmap fields
+- prose can still exist as support text, but it should not be the primary contract for roadmap UI
+
+### Field-To-UI Mapping
+
+| Service output field | Frontend render target |
+|---|---|
+| `roadmap_summary`, `fit_explanation` | roadmap header / overview panel |
+| `current_phase`, `phase_sequence`, `phases` | roadmap timeline and phase cards |
+| `milestones` | milestone cards / progress checkpoints |
+| `projected_outcomes`, `projection_series` | projected chart / goal trajectory |
+| `goal_progress`, `state_comparison` | current vs target summary widgets |
+| `maturity_events`, `maturity_markers`, `post_maturity_options` | maturity banner / next-step panel |
+| `next_best_action`, `next_best_action_card` | CTA card |
+| `service_recommendations` | per-phase service block or recommendation drawer |
+
+### Why This Matters
+
+If Service Agent output is already structured and product-shaped:
+
+- orchestrator does less unnecessary rewriting
+- frontend becomes easier to build
+- demo quality improves immediately
+- roadmap UI remains faithful to the agent contract
+
 ## Demo-Ready Scenarios
 
 The scenarios below are written for hackathon demo and pitch use, not just internal examples. Each one is structured so a team can present:
@@ -1614,6 +1827,32 @@ These should be clearly treated as later-phase enhancements:
 - it is distinct from Planner Agent
 - it is easier to explain to judges and users
 - it can reuse the current architecture and grounded finance state
+
+## Implementation Guidance For Hackathon
+
+### 1. Database Principle
+
+- add only minimal goal schema needed for roadmap timing and maturity
+- avoid building a large profile store
+- prefer durable goal facts over speculative profile fields
+
+### 2. Planner Integration Principle
+
+- Planner remains the source of structured financial state
+- Service Agent should consume planner-derived state first
+- do not duplicate finance analytics in Service Agent
+
+### 3. Orchestrator Integration Principle
+
+- Planner output may need synthesis
+- Service output should be validated and passed through as structured contract
+- keep merge behavior minimal when roadmap UI is the target surface
+
+### 4. Frontend Integration Principle
+
+- frontend should render roadmap directly from Service Agent fields
+- visualization payloads should be consumed as-is where possible
+- prose should support the UI, not replace the roadmap contract
 
 ## Best Recommendation And Final Proposal
 
