@@ -11,6 +11,7 @@ logger.setLevel(logging.INFO)
 # cusum_engine and cusum_state_manager must be bundled in the Lambda deployment zip
 from cusum_state_manager import CUSUMStateManager
 from cusum_engine import CUSUMTimeSeriesDetector
+from income_engine import analyze_income_vs_spend
 
 sns_client = boto3.client('sns')
 
@@ -70,6 +71,13 @@ def lambda_handler(event, context):
         # Path A: Supabase Webhook (HTTP POST via Function URL / API Gateway)
         if "body" in event and isinstance(event["body"], str):
             payload = json.loads(event["body"])
+            
+            # --- START: Handle explicit direct SNS alerts (e.g. Budget) ---
+            if payload.get("type") == "BUDGET_ALERT":
+                _handle_sns_only(payload)
+                return {"statusCode": 200, "body": "OK - SNS Alert processed"}
+            # --- END ---
+            
             record = payload.get("record", payload)
             _process_record(manager, db, record)
 
@@ -102,10 +110,11 @@ def lambda_handler(event, context):
 # =============================================================================
 
 def _process_record(manager, db, record: dict):
-    """Extract fields from a transaction record and run CUSUM analysis."""
+    """Route record to income flow (credit) or CUSUM flow (debit)."""
     user_id = record.get("user_id")
-    jar_id = record.get("jar_id")
-    amount = record.get("amount")
+    jar_id  = record.get("jar_id")
+    amount  = record.get("amount")
+    direction = record.get("direction", "debit")
 
     if not all([user_id, jar_id, amount]):
         logger.warning(f"Skipping record – missing fields: {record}")
@@ -113,7 +122,12 @@ def _process_record(manager, db, record: dict):
 
     amount = float(amount)
 
-    # 1. Load persisted CUSUM state
+    # ── INCOME FLOW (credit) ──────────────────────────────────────────────
+    if direction == "credit":
+        _process_income(manager, db, user_id, jar_id, amount)
+        return
+
+    # ── CUSUM FLOW (debit) — giữ nguyên ────────────────────────────
     state_dict = manager.load_state(user_id, jar_id)
 
     # 2. Compute baseline statistics
@@ -205,3 +219,78 @@ def _handle_alert(db, user_id, jar_id, anomaly_info):
             logger.info("📡 Published to SNS")
         except Exception as e:
             logger.error(f"SNS publish failed: {e}")
+
+def _handle_sns_only(payload):
+    """Directly push pre-formatted messages to SNS without DB logic."""
+    sns_topic_arn = os.environ.get("SNS_TOPIC_ARN")
+    if sns_topic_arn:
+        try:
+            sns_client.publish(
+                TopicArn=sns_topic_arn,
+                Subject="Fintech Budget Alert",
+                Message=f"{payload.get('title', 'Cảnh báo')}\n\n{payload.get('detail', '')}",
+            )
+            logger.info("📡 Budget Alert published to SNS")
+        except Exception as e:
+            logger.error(f"SNS publish failed (Budget Alert): {e}")
+
+
+# =============================================================================
+# Income Detection Flow (direction == 'credit')
+# =============================================================================
+
+def _process_income(manager, db, user_id: str, jar_id: str, income: float):
+    """
+    Kiểm tra income vừa vào so với chi tiêu 30 ngày và gợi ý tiết kiệm.
+    Chỉ gửi thông báo khi thặng dư ≥ 10% income.
+    """
+    monthly_spend = manager.get_monthly_spend(user_id, lookback_days=30)
+    suggestion = analyze_income_vs_spend(income, monthly_spend)
+
+    logger.info(
+        f"INCOME – user={user_id} income={income:,.0f} "
+        f"spend30d={monthly_spend:,.0f} surplus_pct={suggestion.surplus_pct}% "
+        f"suggest={suggestion.should_suggest}"
+    )
+
+    if not suggestion.should_suggest:
+        return
+
+    trace_id = f"income_{int(datetime.now().timestamp())}"
+
+    # ── Ghi vào tier1_notifications ────────────────────────────────────
+    try:
+        db.execute(
+            """
+            INSERT INTO tier1_notifications
+                (user_id, jar_id, anomaly_type, title, detail, severity, trace_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                user_id, jar_id, "other",
+                suggestion.title,
+                suggestion.detail,
+                suggestion.severity,
+                trace_id,
+            ),
+        )
+        logger.info(f"💡 Saving suggestion saved for {user_id}")
+    except Exception as e:
+        logger.error(f"Failed to save income notification: {e}")
+
+    # ── Publish to AWS SNS ─────────────────────────────────────────
+    sns_topic_arn = os.environ.get("SNS_TOPIC_ARN")
+    if sns_topic_arn:
+        try:
+            sns_client.publish(
+                TopicArn=sns_topic_arn,
+                Subject="💡 Gợi ý tiết kiệm — Thu nhập vừa vào!",
+                Message=(
+                    f"{suggestion.title}\n\n"
+                    f"{suggestion.detail}\n\n"
+                    f"Số tiết kiệm gợi ý: {suggestion.suggested_saving_amount:,.0f} VND"
+                ),
+            )
+            logger.info("📡 Income suggestion published to SNS")
+        except Exception as e:
+            logger.error(f"SNS publish failed (Income): {e}")

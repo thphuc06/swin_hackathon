@@ -288,6 +288,34 @@ class CUSUMStateManager:
             print(f"[WARN] Failed to retrieve recent transactions: {e}")
             return []
     
+    def get_monthly_spend(self, user_id: str, lookback_days: int = 30) -> float:
+        """
+        Tổng debit của user trong N ngày gần nhất, tính trên TẤT CẢ jar.
+        Dùng ALL jar vì income là thu nhập chung, không gắn với jar cụ thể.
+
+        Args:
+            user_id: User identifier
+            lookback_days: Số ngày nhìn lại (mặc định 30)
+
+        Returns:
+            Tổng số tiền đã chi (VND), trả về 0.0 nếu không có data
+        """
+        try:
+            result = self.db.query(
+                """
+                SELECT COALESCE(SUM(amount), 0)
+                FROM transactions
+                WHERE user_id = %s
+                  AND direction = 'debit'
+                  AND occurred_at >= NOW() - INTERVAL '%s days'
+                """,
+                (user_id, lookback_days),
+            )
+            return float(result[0][0]) if result else 0.0
+        except Exception as e:
+            print(f"[WARN] Failed to compute monthly_spend: {e}")
+            return 0.0
+
     def cleanup_old_states(self, days_inactive: int = 90) -> int:
         """
         Remove CUSUM states that haven't been updated recently.
