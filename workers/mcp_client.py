@@ -1,3 +1,10 @@
+"""Legacy standalone MCP client helper.
+
+This module is kept only for compatibility/reference work around the old
+standalone finance MCP path. It is not part of the production flow:
+frontend -> backend -> orchestrator -> gateway -> specialist -> planner.
+"""
+
 from __future__ import annotations
 
 import json

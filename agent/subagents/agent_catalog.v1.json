@@ -1,0 +1,74 @@
+{
+  "schema_version": "v1",
+  "agents": [
+    {
+      "id": "planner",
+      "tool_name": "run_planner_agent_v1",
+      "gateway_tool_name": "specialist-agent-mcp___run_planner_agent_v1",
+      "tool_version": "v1",
+      "input_schema": "run_planner_agent_v1.input.json",
+      "output_schema": "run_planner_agent_v1.output.json",
+      "domains": ["planning", "budgeting", "goals", "cashflow"],
+      "capabilities": ["plan_generation", "budgeting", "goal_strategy", "debt_strategy"],
+      "routing": {
+        "cost_tier": "medium",
+        "latency_class": "medium",
+        "safety_class": "normal",
+        "parallelizable": true,
+        "priority": 10,
+        "min_confidence": 0.5
+      },
+      "policy": {
+        "requires_suitability": false,
+        "allowed_intents": ["summary", "risk", "planning", "scenario"]
+      },
+      "enabled": true
+    },
+    {
+      "id": "service",
+      "tool_name": "run_service_agent_v1",
+      "gateway_tool_name": "specialist-agent-mcp___run_service_agent_v1",
+      "tool_version": "v1",
+      "input_schema": "run_service_agent_v1.input.json",
+      "output_schema": "run_service_agent_v1.output.json",
+      "domains": ["planning", "goals", "cashflow"],
+      "capabilities": ["roadmap_generation", "goal_roadmap", "service_recommendation"],
+      "routing": {
+        "cost_tier": "high",
+        "latency_class": "medium",
+        "safety_class": "normal",
+        "parallelizable": false,
+        "priority": 15,
+        "min_confidence": 0.5
+      },
+      "policy": {
+        "requires_suitability": false,
+        "allowed_intents": ["planning", "scenario"]
+      },
+      "enabled": true
+    },
+    {
+      "id": "stock",
+      "tool_name": "run_stock_agent_v1",
+      "gateway_tool_name": "specialist-agent-mcp___run_stock_agent_v1",
+      "tool_version": "v1",
+      "input_schema": "run_stock_agent_v1.input.json",
+      "output_schema": "run_stock_agent_v1.output.json",
+      "domains": ["investing", "portfolio", "equity"],
+      "capabilities": ["stock_analysis", "portfolio_guidance"],
+      "routing": {
+        "cost_tier": "high",
+        "latency_class": "medium",
+        "safety_class": "elevated",
+        "parallelizable": false,
+        "priority": 20,
+        "min_confidence": 0.6
+      },
+      "policy": {
+        "requires_suitability": true,
+        "allowed_intents": ["invest"]
+      },
+      "enabled": true
+    }
+  ]
+}

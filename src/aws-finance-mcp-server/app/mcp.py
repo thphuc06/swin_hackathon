@@ -42,7 +42,7 @@ class AnomalyInput(BaseModel):
 
 class ForecastInput(BaseModel):
     user_id: str
-    horizon: str = Field(default="weekly_12", pattern=r"^(daily_30|weekly_12)$")
+    horizon_days: int = Field(default=84, ge=1, le=1095)
     scenario_overrides: Dict[str, Any] = {}
     as_of: str | None = None
     trace_id: str | None = None
@@ -132,7 +132,11 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
         "type": "object",
         "properties": {
             "user_id": {"type": "string"},
-            "horizon": {"type": "string", "enum": ["daily_30", "weekly_12"], "default": "weekly_12"},
+            "horizon_days": {
+                "type": "integer",
+                "description": "Number of days into the future to forecast (for example 30, 60, 90). Defaults to 84 (12 weeks).",
+                "default": 84
+            },
             "scenario_overrides": {"type": "object"},
             "as_of": {"type": "string"},
             "trace_id": {"type": "string"},
@@ -385,7 +389,7 @@ def mcp_jsonrpc(payload: Dict[str, Any], authorization: str | None = Header(defa
             result = cashflow_forecast(
                 auth_user_id=user.get("sub", ""),
                 user_id=args.user_id,
-                horizon=args.horizon,
+                horizon_days=args.horizon_days,
                 scenario_overrides=args.scenario_overrides,
                 as_of=args.as_of,
                 trace_id=args.trace_id,

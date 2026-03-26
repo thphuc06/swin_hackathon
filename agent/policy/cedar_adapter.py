@@ -7,6 +7,7 @@ from typing import Any, Dict
 import requests
 
 from core.settings import (
+    ALLOW_LEGACY_LOCAL_AUTH,
     CEDAR_POLICY_AUTH_TOKEN,
     CEDAR_POLICY_ENDPOINT,
     CEDAR_POLICY_FAIL_OPEN,
@@ -23,6 +24,7 @@ class CedarPolicyAdapterConfig:
     auth_token: str
     timeout_seconds: float
     fail_open: bool
+    allow_local_fail_open: bool
 
     @classmethod
     def from_env(cls) -> "CedarPolicyAdapterConfig":
@@ -31,6 +33,7 @@ class CedarPolicyAdapterConfig:
             auth_token=str(CEDAR_POLICY_AUTH_TOKEN or "").strip(),
             timeout_seconds=max(0.2, float(CEDAR_POLICY_TIMEOUT_SECONDS or 2.0)),
             fail_open=bool(CEDAR_POLICY_FAIL_OPEN),
+            allow_local_fail_open=bool(ALLOW_LEGACY_LOCAL_AUTH),
         )
 
 
@@ -43,7 +46,14 @@ class CedarPolicyAdapter:
 
     def authorize_tool_call(self, tool_name: str, *, context: Dict[str, Any]) -> PolicyDecision:
         if not self._config.endpoint:
-            return PolicyDecision(allow=True, reason_codes=["policy_fallback_no_cedar_endpoint"])
+            if self._config.allow_local_fail_open:
+                return PolicyDecision(allow=True, reason_codes=["policy_fallback_no_cedar_endpoint_local_only"])
+            return PolicyDecision(
+                allow=False,
+                reason_codes=["policy_cedar_missing_endpoint"],
+                deny_code="POLICY_DENY",
+                metadata={"tool_name": tool_name, "context_keys": sorted(context.keys())},
+            )
 
         payload = {
             "principal": {
@@ -93,10 +103,10 @@ class CedarPolicyAdapter:
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("cedar_authorize_failed tool=%s error=%s", tool_name, exc)
-            if self._config.fail_open:
+            if self._config.fail_open and self._config.allow_local_fail_open:
                 return PolicyDecision(
                     allow=True,
-                    reason_codes=["policy_cedar_error_fail_open"],
+                    reason_codes=["policy_cedar_error_fail_open_local_only"],
                     metadata={"error": str(exc)},
                 )
             return PolicyDecision(

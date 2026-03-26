@@ -1,0 +1,260 @@
+{
+  "$id": "run_service_agent_v1.output.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "run_service_agent_v1 Output",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "agent_id",
+    "agent_version",
+    "tool_name",
+    "status",
+    "correlation",
+    "result",
+    "roadmap_contract",
+    "explanation",
+    "ui_explanation",
+    "warnings",
+    "errors",
+    "diagnostics"
+  ],
+  "properties": {
+    "schema_version": { "type": "string", "enum": ["v1"] },
+    "agent_id": { "const": "service" },
+    "agent_version": { "type": "string" },
+    "tool_name": { "const": "run_service_agent_v1" },
+    "status": { "type": "string", "enum": ["ok", "partial", "error", "blocked"] },
+    "correlation": { "$ref": "base_types.v1.json#/$defs/Correlation" },
+    "result": {
+      "type": "object",
+      "required": ["summary", "roadmap_status", "journey_pattern", "current_phase", "phase_sequence"],
+      "properties": {
+        "summary": { "type": "string" },
+        "roadmap_status": { "type": "string" },
+        "journey_pattern": { "type": "string" },
+        "current_phase": { "type": "string" },
+        "phase_sequence": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "roadmap_contract": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "status",
+        "missing_fields",
+        "warnings",
+        "goal",
+        "planner_state",
+        "user_context",
+        "journey_pattern",
+        "current_phase",
+        "phase_sequence",
+        "phases",
+        "milestones",
+        "projection",
+        "next_best_action",
+        "maturity_events",
+        "service_recommendations",
+        "visualization_support"
+      ],
+      "properties": {
+        "schema_version": { "const": "service_roadmap_contract_v1" },
+        "status": { "type": "string" },
+        "missing_fields": { "type": "array", "items": { "type": "string" } },
+        "warnings": { "type": "array", "items": { "type": "string" } },
+        "goal": { "type": "object", "additionalProperties": true },
+        "planner_state": { "type": "object", "additionalProperties": true },
+        "user_context": { "type": "object", "additionalProperties": true },
+        "journey_pattern": { "type": "string" },
+        "current_phase": { "type": "string" },
+        "phase_sequence": { "type": "array", "items": { "type": "string" } },
+        "phases": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "milestones": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "projection": { "type": "object", "additionalProperties": true },
+        "next_best_action": {
+          "type": "object",
+          "required": ["title", "why"],
+          "properties": {
+            "title": { "type": "string" },
+            "why": { "type": "string" },
+            "timeframe": { "type": "string" },
+            "expected_outcome": { "type": "string" },
+            "success_signal": { "type": "string" },
+            "follow_on_transition": { "type": "string" },
+            "recommended_service": { "type": "object", "additionalProperties": true }
+          },
+          "additionalProperties": false
+        },
+        "maturity_events": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "service_recommendations": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "visualization_support": {
+          "type": "object",
+          "required": [
+            "timeline_nodes",
+            "phase_cards",
+            "milestone_cards",
+            "projection_chart",
+            "next_action_card",
+            "status_banner",
+            "key_metrics",
+            "unlock_conditions"
+          ],
+          "properties": {
+            "timeline_nodes": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+            "phase_cards": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+            "milestone_cards": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+            "projection_chart": { "type": "object", "additionalProperties": true },
+            "next_action_card": { "type": "object", "additionalProperties": true },
+            "status_banner": {
+              "type": "object",
+              "required": ["tone", "title", "message"],
+              "properties": {
+                "tone": { "type": "string", "enum": ["supportive", "cautious", "urgent", "encouraging"] },
+                "title": { "type": "string" },
+                "message": { "type": "string" }
+              },
+              "additionalProperties": false
+            },
+            "key_metrics": {
+              "type": "object",
+              "required": [
+                "current_monthly_capacity",
+                "target_amount",
+                "timeline_months",
+                "feasibility_hint",
+                "readiness_label"
+              ],
+              "properties": {
+                "current_monthly_capacity": { "type": "object", "additionalProperties": true },
+                "current_progress_amount": { "type": ["number", "null"] },
+                "current_progress_ratio": { "type": ["number", "null"] },
+                "target_amount": { "type": ["number", "null"] },
+                "timeline_months": { "type": ["integer", "null"] },
+                "projected_end_amount": { "type": ["number", "null"] },
+                "feasibility_hint": { "type": "string" },
+                "readiness_label": { "type": "string" }
+              },
+              "additionalProperties": false
+            },
+            "unlock_conditions": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "explanation": {
+      "type": "object",
+      "required": [
+        "summary",
+        "why_fit",
+        "current_phase_explanation",
+        "phase_explanations",
+        "milestone_explanations",
+        "next_action_explanation",
+        "projection_explanation",
+        "phase_service_explanations",
+        "milestone_service_explanations",
+        "next_action_service_explanation",
+        "cautions",
+        "confidence_note"
+      ],
+      "properties": {
+        "summary": { "type": "string" },
+        "why_fit": { "type": "string" },
+        "current_phase_explanation": { "type": "string" },
+        "phase_explanations": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "milestone_explanations": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "next_action_explanation": {
+          "type": "object",
+          "required": ["why_now", "what_to_check", "what_success_looks_like", "what_happens_next"],
+          "properties": {
+            "why_now": { "type": "string" },
+            "what_to_check": { "type": "string" },
+            "what_success_looks_like": { "type": "string" },
+            "what_happens_next": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "projection_explanation": {
+          "type": "object",
+          "required": ["basis", "pace_assessment", "target_gap_commentary", "trend_commentary"],
+          "properties": {
+            "basis": { "type": "string" },
+            "pace_assessment": { "type": "string" },
+            "target_gap_commentary": { "type": "string" },
+            "trend_commentary": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "phase_service_explanations": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "milestone_service_explanations": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "next_action_service_explanation": { "type": "object", "additionalProperties": true },
+        "cautions": { "type": "array", "items": { "type": "string" } },
+        "confidence_note": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "ui_explanation": {
+      "type": "object",
+      "required": [
+        "summary",
+        "why_this_roadmap",
+        "why_current_phase",
+        "what_has_to_change_next"
+      ],
+      "properties": {
+        "summary": { "type": "string" },
+        "why_this_roadmap": { "type": "string" },
+        "why_current_phase": { "type": "string" },
+        "what_has_to_change_next": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "policy": { "$ref": "base_types.v1.json#/$defs/PolicyOutcome" },
+    "warnings": { "type": "array", "items": { "$ref": "base_types.v1.json#/$defs/Warning" } },
+    "errors": { "type": "array", "items": { "$ref": "base_types.v1.json#/$defs/Error" } },
+    "diagnostics": {
+      "type": "object",
+      "required": [
+        "readiness_class",
+        "missing_fields",
+        "candidate_count",
+        "rejected_candidates",
+        "reasoning_signals"
+      ],
+      "properties": {
+        "readiness_class": { "type": "string" },
+        "missing_fields": { "type": "array", "items": { "type": "string" } },
+        "candidate_count": { "type": "integer" },
+        "rejected_candidates": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "selected_candidate": { "type": "object", "additionalProperties": true },
+        "reasoning_signals": {
+          "type": "object",
+          "required": [
+            "anomaly_active",
+            "negative_cashflow",
+            "buffer_present",
+            "liquidity_pressure_level",
+            "contribution_capacity_label",
+            "target_gap_level",
+            "current_projection_trend"
+          ],
+          "properties": {
+            "anomaly_active": { "type": "boolean" },
+            "negative_cashflow": { "type": "boolean" },
+            "buffer_present": { "type": "boolean" },
+            "liquidity_pressure_level": { "type": "string" },
+            "contribution_capacity_label": { "type": "string" },
+            "target_gap_level": { "type": "string" },
+            "current_projection_trend": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

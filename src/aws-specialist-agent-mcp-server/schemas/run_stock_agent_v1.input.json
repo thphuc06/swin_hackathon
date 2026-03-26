@@ -1,0 +1,56 @@
+{
+  "$id": "run_stock_agent_v1.input.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "run_stock_agent_v1 Input",
+  "type": "object",
+  "required": ["schema_version", "actor", "correlation", "request", "routing"],
+  "properties": {
+    "schema_version": { "type": "string", "enum": ["v1"] },
+    "actor": {
+      "type": "object",
+      "required": ["actor_id", "user_id", "tenant_id", "scopes"],
+      "properties": {
+        "actor_id": { "type": "string" },
+        "user_id": { "type": "string" },
+        "tenant_id": { "type": "string" },
+        "scopes": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "correlation": {
+      "type": "object",
+      "required": ["session_id", "request_id", "trace_id", "parent_request_id"],
+      "properties": {
+        "session_id": { "type": "string" },
+        "request_id": { "type": "string" },
+        "trace_id": { "type": "string" },
+        "parent_request_id": { "type": "string" },
+        "request_timestamp": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "request": {
+      "type": "object",
+      "required": ["prompt", "intent", "policy_flags", "user_context", "goals", "session_summary"],
+      "properties": {
+        "prompt": { "type": "string" },
+        "intent": { "type": "string" },
+        "policy_flags": { "type": "object", "additionalProperties": true },
+        "user_context": { "type": "object", "additionalProperties": true },
+        "goals": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "session_summary": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "routing": {
+      "type": "object",
+      "required": ["specialist_id", "tool_name"],
+      "properties": {
+        "specialist_id": { "const": "stock" },
+        "tool_name": { "const": "run_stock_agent_v1" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

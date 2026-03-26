@@ -31,3 +31,17 @@ src/**/tmp/*.txt
 
 # build
 build
+*.tsbuildinfo
+
+# root/reference artifacts
+orchestrator-runtime-current.json
+orchestrator-runtime-update.json
+orchestrator_invoke_*.txt
+orchestrator_redeploy_*.json
+backend_stream_redeploy_summary.txt
+file.txt
+
+# generated provisioning/reference manifests
+backend/tmp/provision_clone_*.json
+backend/tmp/seed_manifest_single_user.json
+backend/tmp/seed_validation_single_user.json

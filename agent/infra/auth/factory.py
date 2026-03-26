@@ -13,10 +13,12 @@ def get_auth_provider():
     global _AUTH_PROVIDER
     if _AUTH_PROVIDER is not None:
         return _AUTH_PROVIDER
-    provider = str(AUTH_PROVIDER or "jwt").strip().lower()
+    provider = str(AUTH_PROVIDER or "").strip().lower()
     if provider == "cognito":
         _AUTH_PROVIDER = CognitoAuthProvider()
-    else:
+    elif provider == "jwt":
         _AUTH_PROVIDER = JwtAuthProvider()
+    else:
+        raise RuntimeError(f"Unsupported AUTH_PROVIDER '{provider}'.")
     return _AUTH_PROVIDER
 

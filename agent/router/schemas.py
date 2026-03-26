@@ -13,6 +13,7 @@ INTENT_EXTRACTION_JSON_SCHEMA: Dict[str, Any] = {
     "properties": {
         "schema_version": {"const": "intent_extraction_v1"},
         "intent": {"type": "string", "enum": INTENT_ENUM},
+        "target_agent_id": {"type": ["string", "null"]},
         "sub_intent": {"type": "string"},
         "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
         "domain_relevance": {"type": "number", "minimum": 0.0, "maximum": 1.0},

@@ -1,0 +1,64 @@
+{
+  "agentRuntimeName": "JarsSpecialistMcp",
+  "description": "Specialist MCP runtime for the planner-in-process architecture",
+  "agentRuntimeArtifact": {
+    "containerConfiguration": {
+      "containerUri": "REPLACE_ME_SPECIALIST_IMAGE_REPO_URI:REPLACE_ME_IMAGE_TAG"
+    }
+  },
+  "roleArn": "REPLACE_ME_SPECIALIST_RUNTIME_ROLE_ARN",
+  "networkConfiguration": {
+    "networkMode": "PUBLIC"
+  },
+  "clientToken": "REPLACE_ME_UNIQUE_SPECIALIST_RUNTIME_CLIENT_TOKEN",
+  "authorizerConfiguration": {
+    "customJWTAuthorizer": {
+      "discoveryUrl": "REPLACE_ME_COGNITO_DISCOVERY_URL",
+      "allowedClients": REPLACE_ME_COGNITO_ALLOWED_CLIENTS_JSON
+    }
+  },
+  "requestHeaderConfiguration": {
+    "requestHeaderAllowlist": [
+      "Authorization"
+    ]
+  },
+  "protocolConfiguration": {
+    "serverProtocol": "MCP"
+  },
+  "lifecycleConfiguration": {
+    "idleRuntimeSessionTimeout": 900,
+    "maxLifetime": 28800
+  },
+  "environmentVariables": {
+    "APP_ENV": "REPLACE_ME_APP_ENV",
+    "AWS_REGION": "REPLACE_ME_AWS_REGION",
+    "DEV_BYPASS_AUTH": "false",
+    "COGNITO_USER_POOL_ID": "REPLACE_ME_COGNITO_USER_POOL_ID",
+    "COGNITO_CLIENT_ID": "REPLACE_ME_COGNITO_CLIENT_ID",
+    "COGNITO_ALLOWED_CLIENT_IDS": "REPLACE_ME_COGNITO_ALLOWED_CLIENT_IDS",
+    "COGNITO_SERVICE_CLIENT_IDS": "REPLACE_ME_COGNITO_SERVICE_CLIENT_IDS",
+    "BEDROCK_MODEL_ID": "global.anthropic.claude-sonnet-4-6",
+    "PLANNER_EXECUTION_MODE": "model",
+    "PLANNER_TEMPERATURE": "0.2",
+    "PLANNER_STUB_MODE": "false",
+    "SUPABASE_URL": "REPLACE_ME_SUPABASE_URL",
+    "SUPABASE_SERVICE_ROLE_KEY": "REPLACE_ME_SUPABASE_SERVICE_ROLE_KEY",
+    "SQL_TIMEOUT_SEC": "20",
+    "USE_DARTS_FORECAST": "true",
+    "ENABLE_TRACING": "true",
+    "STOCK_AGENT_EXTERNAL_ENABLED": "REPLACE_ME_STOCK_AGENT_EXTERNAL_ENABLED",
+    "STOCK_AGENT_EXTERNAL_URL": "REPLACE_ME_STOCK_AGENT_EXTERNAL_URL",
+    "STOCK_AGENT_EXTERNAL_BASE_URL": "REPLACE_ME_STOCK_AGENT_EXTERNAL_BASE_URL",
+    "STOCK_AGENT_EXTERNAL_ENDPOINT_PATH": "REPLACE_ME_STOCK_AGENT_EXTERNAL_ENDPOINT_PATH",
+    "STOCK_AGENT_EXTERNAL_MODEL_PROVIDER": "REPLACE_ME_STOCK_AGENT_EXTERNAL_MODEL_PROVIDER",
+    "STOCK_AGENT_EXTERNAL_MODEL": "REPLACE_ME_STOCK_AGENT_EXTERNAL_MODEL",
+    "STOCK_AGENT_EXTERNAL_AUTH_TOKEN": "REPLACE_ME_STOCK_AGENT_EXTERNAL_AUTH_TOKEN",
+    "STOCK_AGENT_EXTERNAL_TIMEOUT_SECONDS": "REPLACE_ME_STOCK_AGENT_EXTERNAL_TIMEOUT_SECONDS",
+    "SPECIALIST_AGENT_VERSION": "0.1.0",
+    "PORT": "8000"
+  },
+  "tags": {
+    "project": "jars",
+    "runtime": "specialist-agent-mcp"
+  }
+}

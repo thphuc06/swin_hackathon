@@ -7,6 +7,9 @@ class OrchestratorState(TypedDict, total=False):
     trace_id: str
     request_id: str
     session_id: str
+    request_timestamp: str
+    request_envelope: Dict[str, Any]
+    trace_ctx: Dict[str, Any]
     session_memory: Dict[str, Any]
     user_token: str
     user_id: str
@@ -21,4 +24,6 @@ class OrchestratorState(TypedDict, total=False):
     response: str
     response_meta: Dict[str, Any]
     selected_agent: str
+    selected_specialist_id: str
+    specialist_selection: Dict[str, Any]
     agent_outputs: Dict[str, Any]

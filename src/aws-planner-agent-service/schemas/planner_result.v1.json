@@ -1,0 +1,42 @@
+{
+  "$id": "planner_result.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PlannerResult v1",
+  "type": "object",
+  "required": ["summary"],
+  "properties": {
+    "summary": { "type": "string" },
+    "key_facts": { "type": "array", "items": { "type": "string" } },
+    "recommendations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["title", "rationale"],
+        "properties": {
+          "title": { "type": "string" },
+          "rationale": { "type": "string" },
+          "priority": { "type": "string", "enum": ["low", "medium", "high"], "default": "medium" },
+          "expected_impact": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "next_actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["action"],
+        "properties": {
+          "action": { "type": "string" },
+          "owner": { "type": "string" },
+          "timeframe": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "citations": { "type": "array", "items": { "$ref": "base_types.v1.json#/$defs/Citation" } },
+    "tool_trace": { "type": "array", "items": { "$ref": "base_types.v1.json#/$defs/ToolCallSummary" } },
+    "warnings": { "type": "array", "items": { "$ref": "base_types.v1.json#/$defs/Warning" } }
+  },
+  "additionalProperties": false
+}

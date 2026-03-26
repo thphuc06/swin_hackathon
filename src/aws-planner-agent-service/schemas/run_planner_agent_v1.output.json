@@ -1,0 +1,12 @@
+{
+  "$id": "run_planner_agent_v1.output.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "allOf": [
+    { "$ref": "agent_result_envelope.v1.json" },
+    {
+      "properties": {
+        "result": { "$ref": "planner_result.v1.json" }
+      }
+    }
+  ]
+}

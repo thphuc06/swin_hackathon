@@ -1,0 +1,27 @@
+{
+  "gatewayIdentifier": "REPLACE_ME_GATEWAY_ID",
+  "name": "specialist-agent-mcp",
+  "description": "Specialist MCP target backed by AgentCore Runtime MCP server",
+  "clientToken": "REPLACE_ME_UNIQUE_TARGET_CLIENT_TOKEN",
+  "targetConfiguration": {
+    "mcp": {
+      "mcpServer": {
+        "endpoint": "https://bedrock-agentcore.REPLACE_ME_AWS_REGION.amazonaws.com/runtimes/REPLACE_ME_URLENCODED_SPECIALIST_RUNTIME_ARN/invocations?qualifier=DEFAULT"
+      }
+    }
+  },
+  "credentialProviderConfigurations": [
+    {
+      "credentialProviderType": "OAUTH",
+      "credentialProvider": {
+        "oauthCredentialProvider": {
+          "providerArn": "REPLACE_ME_GATEWAY_OAUTH_PROVIDER_ARN",
+          "scopes": [
+            "specialist-agent-mcp-api/access"
+          ],
+          "grantType": "CLIENT_CREDENTIALS"
+        }
+      }
+    }
+  ]
+}

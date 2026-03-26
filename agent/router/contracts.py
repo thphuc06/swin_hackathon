@@ -21,6 +21,7 @@ class IntentExtractionV1(BaseModel):
 
     schema_version: str = "intent_extraction_v1"
     intent: IntentName
+    target_agent_id: str | None = None
     sub_intent: str = ""
     confidence: float = Field(ge=0.0, le=1.0)
     domain_relevance: float = Field(default=1.0, ge=0.0, le=1.0)

@@ -1,0 +1,46 @@
+{
+  "ServiceArn": "REPLACE_ME_BACKEND_SERVICE_ARN",
+  "SourceConfiguration": {
+    "ImageRepository": {
+      "ImageIdentifier": "REPLACE_ME_BACKEND_IMAGE_REPO_URI:REPLACE_ME_IMAGE_TAG",
+      "ImageConfiguration": {
+        "Port": "8080",
+        "RuntimeEnvironmentVariables": {
+          "APP_ENV": "REPLACE_ME_APP_ENV",
+          "AWS_REGION": "REPLACE_ME_AWS_REGION",
+          "DEV_BYPASS_AUTH": "false",
+          "COGNITO_USER_POOL_ID": "REPLACE_ME_COGNITO_USER_POOL_ID",
+          "COGNITO_CLIENT_ID": "REPLACE_ME_COGNITO_CLIENT_ID",
+          "COGNITO_ALLOWED_CLIENT_IDS": "REPLACE_ME_COGNITO_ALLOWED_CLIENT_IDS",
+          "AGENTCORE_RUNTIME_ARN": "REPLACE_ME_AGENTCORE_RUNTIME_ARN"
+        }
+      },
+      "ImageRepositoryType": "ECR"
+    },
+    "AutoDeploymentsEnabled": false,
+    "AuthenticationConfiguration": {
+      "AccessRoleArn": "REPLACE_ME_APPRUNNER_ECR_ACCESS_ROLE_ARN"
+    }
+  },
+  "InstanceConfiguration": {
+    "Cpu": "1024",
+    "Memory": "2048"
+  },
+  "HealthCheckConfiguration": {
+    "Protocol": "HTTP",
+    "Path": "/health",
+    "Interval": 10,
+    "Timeout": 5,
+    "HealthyThreshold": 1,
+    "UnhealthyThreshold": 5
+  },
+  "NetworkConfiguration": {
+    "EgressConfiguration": {
+      "EgressType": "DEFAULT"
+    },
+    "IngressConfiguration": {
+      "IsPubliclyAccessible": true
+    },
+    "IpAddressType": "IPV4"
+  }
+}

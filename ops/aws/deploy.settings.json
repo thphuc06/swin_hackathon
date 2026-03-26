@@ -1,0 +1,20 @@
+{
+  "profile": "jars-dev",
+  "appEnv": "staging",
+  "region": "us-east-1",
+  "accountId": "617287375312",
+  "sourceBucket": "bedrock-agentcore-codebuild-sources-617287375312-us-east-1",
+  "gateway": {
+    "id": "financial-adviosry-gw-specialist-jgrg0r0ojo",
+    "createTemplatePath": "ops/aws/gateway-create-specialist.json",
+    "targetTemplatePath": "ops/aws/gateway-target-create-specialist.template.json"
+  },
+  "orchestrator": {
+    "policyAllowedTools": "spend_analytics_v1,cashflow_forecast_v1,jar_allocation_suggest_v1,anomaly_signals_v1,risk_profile_non_investment_v1,recurring_cashflow_detect_v1,goal_feasibility_v1,what_if_scenario_v1,run_service_agent_v1,run_stock_agent_v1,suitability_guard_v1",
+    "gatewayTimeoutSeconds": "90"
+  },
+  "build": {
+    "defaultImageTagSuffix": "arm64",
+    "specialistOptionalFinanceExtras": true
+  }
+}

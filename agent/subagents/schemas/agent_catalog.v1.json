@@ -1,0 +1,61 @@
+{
+  "$id": "agent_catalog.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Specialist Agent Catalog v1",
+  "type": "object",
+  "required": ["schema_version", "agents"],
+  "properties": {
+    "schema_version": { "type": "string", "enum": ["v1"] },
+    "agents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "tool_name",
+          "tool_version",
+          "input_schema",
+          "output_schema",
+          "domains",
+          "capabilities",
+          "routing",
+          "enabled"
+        ],
+        "properties": {
+          "id": { "type": "string" },
+          "tool_name": { "type": "string" },
+          "gateway_tool_name": { "type": "string" },
+          "tool_version": { "type": "string" },
+          "input_schema": { "type": "string" },
+          "output_schema": { "type": "string" },
+          "domains": { "type": "array", "items": { "type": "string" } },
+          "capabilities": { "type": "array", "items": { "type": "string" } },
+          "routing": {
+            "type": "object",
+            "required": ["cost_tier", "latency_class", "safety_class", "parallelizable"],
+            "properties": {
+              "cost_tier": { "type": "string", "enum": ["low", "medium", "high"] },
+              "latency_class": { "type": "string", "enum": ["low", "medium", "high"] },
+              "safety_class": { "type": "string", "enum": ["normal", "elevated", "restricted"] },
+              "parallelizable": { "type": "boolean" },
+              "priority": { "type": "integer", "minimum": 0 },
+              "min_confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+            },
+            "additionalProperties": false
+          },
+          "policy": {
+            "type": "object",
+            "properties": {
+              "requires_suitability": { "type": "boolean" },
+              "allowed_intents": { "type": "array", "items": { "type": "string" } }
+            },
+            "additionalProperties": false
+          },
+          "enabled": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

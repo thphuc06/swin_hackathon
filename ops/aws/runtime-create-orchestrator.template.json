@@ -1,0 +1,82 @@
+{
+  "agentRuntimeName": "JarsOrchestratorRuntime",
+  "description": "Strands orchestrator runtime for the specialist-first architecture",
+  "agentRuntimeArtifact": {
+    "containerConfiguration": {
+      "containerUri": "REPLACE_ME_ORCHESTRATOR_IMAGE_REPO_URI:REPLACE_ME_IMAGE_TAG"
+    }
+  },
+  "roleArn": "REPLACE_ME_ORCHESTRATOR_RUNTIME_ROLE_ARN",
+  "networkConfiguration": {
+    "networkMode": "PUBLIC"
+  },
+  "clientToken": "REPLACE_ME_UNIQUE_ORCHESTRATOR_RUNTIME_CLIENT_TOKEN",
+  "authorizerConfiguration": {
+    "customJWTAuthorizer": {
+      "discoveryUrl": "REPLACE_ME_COGNITO_DISCOVERY_URL",
+      "allowedClients": REPLACE_ME_COGNITO_ALLOWED_CLIENTS_JSON
+    }
+  },
+  "requestHeaderConfiguration": {
+    "requestHeaderAllowlist": [
+      "Authorization"
+    ]
+  },
+  "protocolConfiguration": {
+    "serverProtocol": "HTTP"
+  },
+  "lifecycleConfiguration": {
+    "idleRuntimeSessionTimeout": 900,
+    "maxLifetime": 28800
+  },
+  "environmentVariables": {
+    "APP_ENV": "REPLACE_ME_APP_ENV",
+    "AWS_REGION": "REPLACE_ME_AWS_REGION",
+    "BEDROCK_MODEL_ID": "global.anthropic.claude-sonnet-4-6",
+    "AGENTCORE_GATEWAY_ENDPOINT": "REPLACE_ME_GATEWAY_ENDPOINT",
+    "BACKEND_API_BASE": "REPLACE_ME_BACKEND_API_BASE",
+    "PORT": "8080",
+    "AUTH_PROVIDER": "cognito",
+    "AUTH_DEV_BYPASS": "false",
+    "COGNITO_USER_POOL_ID": "REPLACE_ME_COGNITO_USER_POOL_ID",
+    "COGNITO_CLIENT_ID": "REPLACE_ME_COGNITO_CLIENT_ID",
+    "COGNITO_ALLOWED_CLIENT_IDS": "REPLACE_ME_COGNITO_ALLOWED_CLIENT_IDS",
+    "COGNITO_REGION": "REPLACE_ME_COGNITO_REGION",
+    "POLICY_ADAPTER": "simple",
+    "POLICY_ALLOWED_TOOLS": "REPLACE_ME_POLICY_ALLOWED_TOOLS",
+    "GATEWAY_TIMEOUT_SECONDS": "REPLACE_ME_GATEWAY_TIMEOUT_SECONDS",
+    "STOCK_AGENT_EXTERNAL_ENABLED": "REPLACE_ME_STOCK_AGENT_EXTERNAL_ENABLED",
+    "STOCK_AGENT_EXTERNAL_URL": "REPLACE_ME_STOCK_AGENT_EXTERNAL_URL",
+    "STOCK_AGENT_EXTERNAL_BASE_URL": "REPLACE_ME_STOCK_AGENT_EXTERNAL_BASE_URL",
+    "STOCK_AGENT_EXTERNAL_ENDPOINT_PATH": "REPLACE_ME_STOCK_AGENT_EXTERNAL_ENDPOINT_PATH",
+    "STOCK_AGENT_EXTERNAL_AUTH_TOKEN": "REPLACE_ME_STOCK_AGENT_EXTERNAL_AUTH_TOKEN",
+    "STOCK_AGENT_EXTERNAL_MODEL_PROVIDER": "REPLACE_ME_STOCK_AGENT_EXTERNAL_MODEL_PROVIDER",
+    "STOCK_AGENT_EXTERNAL_MODEL": "REPLACE_ME_STOCK_AGENT_EXTERNAL_MODEL",
+    "STOCK_AGENT_EXTERNAL_CONNECT_TIMEOUT_SECONDS": "REPLACE_ME_STOCK_AGENT_EXTERNAL_CONNECT_TIMEOUT_SECONDS",
+    "STOCK_AGENT_EXTERNAL_READ_TIMEOUT_SECONDS": "REPLACE_ME_STOCK_AGENT_EXTERNAL_READ_TIMEOUT_SECONDS",
+    "USE_LOCAL_MOCKS": "false",
+    "RESPONSE_MODE": "llm_enforce",
+    "SERVICE_MATCHER_MODE": "dynamic_v2",
+    "SERVICE_CATALOG_TTL_SECONDS": "300",
+    "SERVICE_MATCH_TOP_K": "3",
+    "SERVICE_MATCH_MIN_SCORE": "0.58",
+    "SERVICE_CATALOG_STRICT_VALIDATION": "true",
+    "SERVICE_CATALOG_FORCE_RELOAD": "false",
+    "SERVICE_SIGNAL_REQUIRED_STRICT": "true",
+    "SERVICE_CLARIFY_MARGIN_MIN": "0.08",
+    "SERVICE_EMBED_ENABLED": "true",
+    "SERVICE_EMBED_MODEL_ID": "amazon.titan-embed-text-v2:0",
+    "SERVICE_EMBED_TOP_N": "8",
+    "ENCODING_GATE_ENABLED": "true",
+    "ENCODING_REPAIR_ENABLED": "true",
+    "ENCODING_REPAIR_SCORE_MIN": "0.12",
+    "ENCODING_FAILFAST_SCORE_MIN": "0.45",
+    "ENCODING_REPAIR_MIN_DELTA": "0.10",
+    "ENCODING_NORMALIZATION_FORM": "NFC",
+    "LOG_LEVEL": "info"
+  },
+  "tags": {
+    "project": "jars",
+    "runtime": "orchestrator"
+  }
+}

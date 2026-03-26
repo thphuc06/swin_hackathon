@@ -1,173 +1,188 @@
-# Supabase Schema Design (MVP)
+# Supabase Public REST Contract
 
-This is a design-only schema. No migrations are generated in this MVP. Tables are structured to migrate to Aurora PostgreSQL later.
+This document reflects the current Supabase public REST schema used by the
+production flow:
 
-## users
-- id (uuid, pk)
-- email (text, unique)
-- created_at (timestamptz)
+`frontend -> backend -> orchestrator -> gateway -> specialist -> planner -> database`
 
-## profiles
-- user_id (uuid, pk, fk -> users.id)
-- display_name (text)
-- risk_profile_current (text)
-- locale (text)
-- updated_at (timestamptz)
+It replaces the earlier design-only MVP notes. If this document drifts from the
+live project, regenerate it from the Supabase OpenAPI spec and update the repo.
 
-## jars
-- id (uuid, pk)
-- user_id (uuid, fk)
-- template_id (uuid, fk -> jar_templates.id, nullable)
-- name (text)
-- description (text, nullable)
-- keywords (jsonb, nullable) -- array of strings
-- target_amount (numeric)
-- created_at (timestamptz)
-- updated_at (timestamptz)
+## Identity Contract
 
-## jar_templates
-Default jars for first-time users.
-- id (uuid, pk)
-- name (text)
-- description (text, nullable)
-- keywords (jsonb, nullable)
-- is_default (bool)
-- created_at (timestamptz)
+- `users.id` is the canonical application user id.
+- On the deployed path, `Cognito sub == backend user_id == orchestrator actor_id == specialist/planner user_id`.
+- Runtime code must not remap a Cognito subject to a different data user through
+  env or per-request overrides.
 
-## categories (hierarchical)
-- id (uuid, pk)
-- user_id (uuid, fk)
-- parent_id (uuid, nullable)
-- name (text)
+## Required Tables Exposed In Supabase REST
 
-## transactions
-- id (uuid, pk)
-- user_id (uuid, fk)
-- jar_id (uuid, fk)
-- category_id (uuid, fk)
-- amount (numeric)
-- currency (text)
-- counterparty (text)
-- raw_narrative (text, nullable) -- bank-generated memo/reference
-- user_note (text, nullable) -- user-entered note
-- channel (text, nullable) -- transfer/card/qr/cash/other
-- occurred_at (timestamptz) -- when transaction happened
-- created_at (timestamptz)
-- direction (text) -- debit/credit
+### `users`
+- `id`
+- `email`
+- `created_at`
 
-## rules_counterparty_map
-User-confirmed mapping for messy data (counterparty -> jar/category).
-- id (uuid, pk)
-- user_id (uuid, fk)
-- counterparty_norm (text)
-- jar_id (uuid, fk)
-- category_id (uuid, fk)
-- created_at (timestamptz)
+### `profiles`
+- `user_id`
+- `display_name`
+- `risk_profile_current`
+- `locale`
+- `updated_at`
 
-## budgets
-User-defined thresholds used by Tier1 triggers (weekly/monthly).
-- id (uuid, pk)
-- user_id (uuid, fk)
-- scope_type (text) -- overall/jar/category
-- scope_id (uuid, nullable) -- jar_id or category_id when applicable
-- period (text) -- weekly/monthly
-- limit_amount (numeric)
-- currency (text)
-- active (bool)
-- created_at (timestamptz)
-- updated_at (timestamptz)
+### `jars`
+- `id`
+- `user_id`
+- `template_id`
+- `name`
+- `description`
+- `keywords`
+- `target_amount`
+- `created_at`
+- `updated_at`
 
-## tx_label_events
-Supervision stream for training + evaluation (every confirm/override).
-- id (uuid, pk)
-- user_id (uuid, fk)
-- txn_id (uuid, fk -> transactions.id)
-- model_version (text)
-- suggested_topk (jsonb) -- ids + scores
-- final_jar_id (uuid)
-- final_category_id (uuid)
-- is_override (bool)
-- created_at (timestamptz)
+### `categories`
+- `id`
+- `user_id`
+- `parent_id`
+- `name`
 
-## signals_daily
-Truth-aligned signals (computed from views) used by Tier1 and Tier2.
-- id (uuid, pk)
-- user_id (uuid, fk)
-- day (date)
-- discipline_score (int)
-- categorized_rate (numeric)
-- missing_rate (numeric)
-- runway_days (int)
-- risk_90d_flag (bool)
-- payload (jsonb)
+### `transactions`
+- `id`
+- `user_id`
+- `jar_id`
+- `category_id`
+- `amount`
+- `currency`
+- `counterparty`
+- `raw_narrative`
+- `user_note`
+- `channel`
+- `occurred_at`
+- `created_at`
+- `direction`
 
-## txn_agg_daily
-- id (uuid, pk)
-- user_id (uuid, fk)
-- day (date)
-- total_spend (numeric)
-- total_income (numeric)
-- jar_breakdown (jsonb)
-- category_breakdown (jsonb)
+### `budgets`
+- `id`
+- `user_id`
+- `scope_type`
+- `scope_id`
+- `period`
+- `limit_amount`
+- `currency`
+- `active`
+- `created_at`
+- `updated_at`
 
-## goals
-- id (uuid, pk)
-- user_id (uuid, fk)
-- name (text)
-- target_amount (numeric)
-- horizon_months (int)
-- created_at (timestamptz)
+### `goals`
+- `id`
+- `user_id`
+- `name`
+- `target_amount`
+- `horizon_months`
+- `created_at`
 
-## risk_profile_versions
-- id (uuid, pk)
-- user_id (uuid, fk)
-- profile (text)
-- notes (text)
-- created_at (timestamptz)
+### `income_sources`
+- `id`
+- `user_id`
+- `source_name`
+- `monthly_amount`
+- `updated_at`
 
-## notifications
-- id (uuid, pk)
-- user_id (uuid, fk)
-- title (text)
-- detail (text)
-- trace_id (text)
-- created_at (timestamptz)
-- is_read (bool)
+### `income_events`
+- `id`
+- `user_id`
+- `source_id`
+- `amount`
+- `occurred_at`
 
-## insights
-- id (uuid, pk)
-- user_id (uuid, fk)
-- type (text)
-- payload (jsonb)
-- created_at (timestamptz)
+### `balance_daily`
+- `id`
+- `user_id`
+- `balance_date`
+- `scope_type`
+- `scope_id`
+- `currency`
+- `opening_balance`
+- `inflow_total`
+- `outflow_total`
+- `closing_balance`
+- `source`
+- `quality_flag`
+- `payload`
+- `created_at`
+- `updated_at`
 
-## income_sources
-- id (uuid, pk)
-- user_id (uuid, fk)
-- source_name (text)
-- monthly_amount (numeric)
-- updated_at (timestamptz)
+### `forecast_actuals_log`
+- `id`
+- `user_id`
+- `trace_id`
+- `tool_name`
+- `model_name`
+- `horizon`
+- `granularity`
+- `forecast_as_of`
+- `target_start`
+- `target_end`
+- `predicted_p10`
+- `predicted_p50`
+- `predicted_p90`
+- `actual_value`
+- `actual_recorded_at`
+- `error_signed`
+- `error_abs`
+- `within_p80`
+- `within_p90`
+- `payload`
+- `created_at`
 
-## income_events
-- id (uuid, pk)
-- user_id (uuid, fk)
-- source_id (uuid, fk)
-- amount (numeric)
-- occurred_at (timestamptz)
+### `anomaly_feedback_log`
+- `id`
+- `user_id`
+- `trace_id`
+- `tool_name`
+- `anomaly_type`
+- `detector_name`
+- `entity_type`
+- `entity_id`
+- `feedback_label`
+- `feedback_source`
+- `note`
+- `payload`
+- `resolved_at`
+- `created_at`
 
-## audit_event_log
-- id (uuid, pk)
-- user_id (uuid, fk)
-- trace_id (text)
-- event_type (text)
-- payload (jsonb)
-- created_at (timestamptz)
+### `allocation_decision_log`
+- `id`
+- `user_id`
+- `trace_id`
+- `tool_name`
+- `decision_status`
+- `monthly_income_reference`
+- `recommendation_payload`
+- `final_allocation_payload`
+- `execution_payload`
+- `note`
+- `decided_at`
+- `created_at`
 
-## audit_decision_log
-- id (uuid, pk)
-- user_id (uuid, fk)
-- trace_id (text)
-- decision_type (text)
-- decision (text)
-- payload (jsonb)
-- created_at (timestamptz)
+## Optional / Not Exposed In Current REST Schema
+
+These tables are not currently exposed in the live Supabase public REST OpenAPI
+schema. Runtime code must treat them as optional capabilities, not mandatory
+dependencies.
+
+### `audit_event_log`
+- not exposed in current REST schema
+
+### `audit_decision_log`
+- not exposed in current REST schema
+
+## Provisioning Notes
+
+- Production runtime depends on real user-scoped data existing under the live
+  `users.id` / `user_id`.
+- Fixture/demo assets under [backend/seed](/C:/Users/Admin/Desktop/swin_hackathon/backend/seed)
+  are not the source of truth for deployed users.
+- For smoke users or Cognito-sub migration, use a provisioning/sync script to
+  copy user-scoped data into the live target user id instead of reintroducing
+  runtime identity remapping.

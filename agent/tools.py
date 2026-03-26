@@ -25,6 +25,7 @@ from tenacity import (
 )
 
 from core.errors import ToolTimeoutError, ToolUnavailableError, ValidationFailedError
+from observability.trace_context import build_trace_context, log_trace_event, trace_headers
 from config import (
     AGENTCORE_GATEWAY_ENDPOINT,
     AGENTCORE_GATEWAY_TOOL_NAME,
@@ -59,6 +60,19 @@ _backend_session: requests.Session | None = None
 _gateway_breaker_lock = threading.Lock()
 _gateway_consecutive_failures = 0
 _gateway_breaker_opened_at = 0.0
+
+# MCP gateway session state.
+_gateway_mcp_lock = threading.RLock()
+_gateway_mcp_session_id = ""
+_gateway_mcp_protocol_version = ""
+_gateway_mcp_initialized = False
+_gateway_mcp_token_fingerprint = ""
+_gateway_mcp_session_supported: bool | None = None
+
+_MCP_PROTOCOL_VERSION_HEADER = "mcp-protocol-version"
+_MCP_SESSION_ID_HEADER = "mcp-session-id"
+_DEFAULT_MCP_PROTOCOL_VERSION = "2025-06-18"
+_MCP_CLIENT_INFO = {"name": "jars-orchestrator", "version": "0.1.0"}
 
 
 def _gateway_breaker_state() -> Dict[str, Any]:
@@ -150,6 +164,23 @@ def _get_gateway_session() -> requests.Session:
             HTTP_POOL_MAXSIZE,
         )
     return _gateway_session
+
+
+def _reset_gateway_session() -> None:
+    """Drop the pooled Gateway HTTP session after a downstream transport failure.
+
+    AgentCore Gateway occasionally returns a tool-level MCP transport error when a
+    reused keep-alive connection has gone stale. Resetting the session forces the
+    next call onto a fresh connection instead of reusing the broken socket.
+    """
+    global _gateway_session
+    if _gateway_session is not None:
+        try:
+            _gateway_session.close()
+        except Exception:
+            pass
+        _gateway_session = None
+    _clear_gateway_mcp_state()
 
 
 def _get_backend_session() -> requests.Session:
@@ -502,6 +533,141 @@ def _auth_headers(token: str) -> Dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _token_fingerprint(token: str) -> str:
+    if not token:
+        return ""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
+
+
+def _clear_gateway_mcp_state() -> None:
+    global _gateway_mcp_session_id, _gateway_mcp_protocol_version, _gateway_mcp_initialized, _gateway_mcp_token_fingerprint, _gateway_mcp_session_supported
+    with _gateway_mcp_lock:
+        _gateway_mcp_session_id = ""
+        _gateway_mcp_protocol_version = ""
+        _gateway_mcp_initialized = False
+        _gateway_mcp_token_fingerprint = ""
+        _gateway_mcp_session_supported = None
+
+
+def _gateway_mcp_headers(
+    token: str,
+    *,
+    include_session: bool,
+    protocol_version: str | None = None,
+    call_id: str | None = None,
+    trace_id: str | None = None,
+    extra_headers: Dict[str, str] | None = None,
+) -> Dict[str, str]:
+    headers = _auth_headers(token)
+    headers["Accept"] = "application/json, text/event-stream"
+    headers["Content-Type"] = "application/json"
+    headers["Connection"] = "close"
+    if include_session and _gateway_mcp_session_id and _gateway_mcp_session_supported is not False:
+        headers[_MCP_SESSION_ID_HEADER] = _gateway_mcp_session_id
+    resolved_protocol = protocol_version or _gateway_mcp_protocol_version
+    if resolved_protocol:
+        headers[_MCP_PROTOCOL_VERSION_HEADER] = resolved_protocol
+    if call_id:
+        headers["X-Call-Id"] = str(call_id)
+    if trace_id:
+        headers["X-Trace-Id"] = str(trace_id)
+    if isinstance(extra_headers, dict):
+        headers.update({str(k): str(v) for k, v in extra_headers.items() if str(v).strip()})
+    return headers
+
+
+def _gateway_initialize_session(token: str, *, call_id: str | None = None, trace_id: str | None = None) -> None:
+    global _gateway_mcp_session_id, _gateway_mcp_protocol_version, _gateway_mcp_initialized, _gateway_mcp_token_fingerprint, _gateway_mcp_session_supported
+
+    endpoint = _gateway_endpoint()
+    initialize_payload = {
+        "jsonrpc": "2.0",
+        "id": f"{call_id or 'gateway'}-initialize",
+        "method": "initialize",
+        "params": {
+            "protocolVersion": _DEFAULT_MCP_PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": dict(_MCP_CLIENT_INFO),
+        },
+    }
+    initialize_response = requests.post(
+        endpoint,
+        json=initialize_payload,
+        headers=_gateway_mcp_headers(
+            token,
+            include_session=False,
+            protocol_version=_DEFAULT_MCP_PROTOCOL_VERSION,
+            call_id=call_id,
+            trace_id=trace_id,
+        ),
+        timeout=GATEWAY_TIMEOUT_SECONDS,
+    )
+    initialize_response.raise_for_status()
+    initialize_data = initialize_response.json() if initialize_response.text.strip() else {}
+    if "error" in initialize_data:
+        raise RuntimeError(f"Gateway initialize error: {initialize_data['error']}")
+
+    session_id = str(initialize_response.headers.get(_MCP_SESSION_ID_HEADER) or "").strip()
+    result = initialize_data.get("result") if isinstance(initialize_data, dict) else {}
+    negotiated_protocol = str((result or {}).get("protocolVersion") or _DEFAULT_MCP_PROTOCOL_VERSION).strip()
+
+    if not session_id:
+        _gateway_mcp_session_id = ""
+        _gateway_mcp_protocol_version = negotiated_protocol
+        _gateway_mcp_initialized = True
+        _gateway_mcp_token_fingerprint = _token_fingerprint(token)
+        _gateway_mcp_session_supported = False
+        logger.info(
+            "Gateway initialize completed without mcp-session-id; using sessionless gateway mode with protocol=%s",
+            negotiated_protocol,
+        )
+        return
+
+    initialized_payload = {
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized",
+        "params": {},
+    }
+    initialized_response = requests.post(
+        endpoint,
+        json=initialized_payload,
+        headers=_gateway_mcp_headers(
+            token,
+            include_session=False,
+            protocol_version=negotiated_protocol,
+            call_id=call_id,
+            trace_id=trace_id,
+            extra_headers={_MCP_SESSION_ID_HEADER: session_id},
+        ),
+        timeout=GATEWAY_TIMEOUT_SECONDS,
+    )
+    initialized_response.raise_for_status()
+
+    _gateway_mcp_session_id = session_id
+    _gateway_mcp_protocol_version = negotiated_protocol
+    _gateway_mcp_initialized = True
+    _gateway_mcp_token_fingerprint = _token_fingerprint(token)
+    _gateway_mcp_session_supported = True
+    logger.info(
+        "Initialized Gateway MCP session: session_id=%s protocol=%s",
+        session_id,
+        negotiated_protocol,
+    )
+
+
+def _ensure_gateway_initialized(token: str, *, call_id: str | None = None, trace_id: str | None = None) -> None:
+    token_fingerprint = _token_fingerprint(token)
+    with _gateway_mcp_lock:
+        if (
+            _gateway_mcp_initialized
+            and _gateway_mcp_token_fingerprint == token_fingerprint
+            and (_gateway_mcp_session_supported is False or _gateway_mcp_session_id)
+        ):
+            return
+        _clear_gateway_mcp_state()
+        _gateway_initialize_session(token, call_id=call_id, trace_id=trace_id)
+
+
 def _gateway_endpoint() -> str:
     if not AGENTCORE_GATEWAY_ENDPOINT:
         return ""
@@ -532,6 +698,7 @@ def _gateway_jsonrpc(
     user_token: str,
     call_id: str | None = None,
     extra_headers: Dict[str, str] | None = None,
+    _session_retry: bool = False,
 ) -> Dict[str, Any]:
     """Call AgentCore Gateway with retry logic for transient errors.
     
@@ -560,24 +727,64 @@ def _gateway_jsonrpc(
         )
     
     try:
-        session = _get_gateway_session()
         trace_id = payload.get("params", {}).get("arguments", {}).get("trace_id")
-        headers = _auth_headers(user_token)
-        if isinstance(extra_headers, dict):
-            headers.update({str(k): str(v) for k, v in extra_headers.items() if str(v).strip()})
-        if call_id:
-            headers["X-Call-Id"] = str(call_id)
-        if trace_id:
-            headers["X-Trace-Id"] = str(trace_id)
-        response = session.post(
-            endpoint,
-            json=payload,
-            headers=headers,
-            timeout=GATEWAY_TIMEOUT_SECONDS,
-        )
+        method = str(payload.get("method") or "").strip()
+        with _gateway_mcp_lock:
+            if method != "initialize":
+                _ensure_gateway_initialized(user_token, call_id=call_id, trace_id=trace_id)
+            response = requests.post(
+                endpoint,
+                json=payload,
+                headers=_gateway_mcp_headers(
+                    user_token,
+                    include_session=method != "initialize",
+                    protocol_version=_DEFAULT_MCP_PROTOCOL_VERSION if method == "initialize" else None,
+                    call_id=call_id,
+                    trace_id=trace_id,
+                    extra_headers=extra_headers,
+                ),
+                timeout=GATEWAY_TIMEOUT_SECONDS,
+            )
+        if (
+            method != "initialize"
+            and response.status_code in {400, 404}
+            and not _session_retry
+        ):
+            detail_text = (response.text or "").lower()
+            if any(marker in detail_text for marker in ("session", "initializ", "mcp invocation failed")):
+                logger.warning(
+                    "Gateway MCP session rejected request; reinitializing and retrying once: method=%s call_id=%s",
+                    method,
+                    call_id,
+                )
+                _clear_gateway_mcp_state()
+                return _gateway_jsonrpc(
+                    payload,
+                    user_token,
+                    call_id=call_id,
+                    extra_headers=extra_headers,
+                    _session_retry=True,
+                )
         response.raise_for_status()
-        data = response.json()
+        data = response.json() if response.text.strip() else {}
         if "error" in data:
+            error_text = json.dumps(data.get("error"), ensure_ascii=True).lower()
+            if method != "initialize" and not _session_retry and any(
+                marker in error_text for marker in ("session", "initializ")
+            ):
+                logger.warning(
+                    "Gateway MCP JSON-RPC error suggests stale session; reinitializing and retrying once: method=%s call_id=%s",
+                    method,
+                    call_id,
+                )
+                _clear_gateway_mcp_state()
+                return _gateway_jsonrpc(
+                    payload,
+                    user_token,
+                    call_id=call_id,
+                    extra_headers=extra_headers,
+                    _session_retry=True,
+                )
             logger.warning("Gateway error: %s call_id=%s", data["error"], call_id)
             _gateway_breaker_record_failure("jsonrpc_error")
             raise RuntimeError(f"Gateway tool error: {data['error']}")
@@ -659,6 +866,31 @@ def _parse_tool_result_content(content: Any) -> Dict[str, Any]:
     return {}
 
 
+def _extract_tool_error_detail(content: Any) -> str:
+    if not isinstance(content, list):
+        return ""
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if not isinstance(text, str):
+            continue
+        detail = text.strip()
+        if detail:
+            return detail
+    return ""
+
+
+def _is_retryable_gateway_tool_error(detail: str) -> bool:
+    text = str(detail or "").strip().lower()
+    if not text:
+        return False
+    return "transport request failed" in text or "mcp invocation failed" in text
+
+
+_GATEWAY_DOWNSTREAM_TOOL_RETRY_LIMIT = 2
+
+
 def _drop_none(value: Any) -> Any:
     if isinstance(value, dict):
         cleaned: Dict[str, Any] = {}
@@ -697,8 +929,14 @@ def initialize_tool_registry(user_token: str) -> Dict[str, Any]:
         
         for tool in tools:
             full_name = str(tool.get("name") or "")
-            # Extract base name (remove server prefix if present)
-            base_name = full_name.split("___")[-1] if "___" in full_name else full_name
+            # Extract base name (remove server prefix if present).
+            # Supports both "server___tool" and "server__tool" naming conventions.
+            if "___" in full_name:
+                base_name = full_name.split("___")[-1]
+            elif "__" in full_name:
+                base_name = full_name.split("__")[-1]
+            else:
+                base_name = full_name
             
             _resolved_tool_names[base_name] = full_name
             _tool_schemas[base_name] = tool
@@ -737,7 +975,7 @@ def _resolve_tool_name(base_name: str, user_token: str) -> str:
     tools = (data.get("result") or {}).get("tools", [])
     for tool in tools:
         name = str(tool.get("name") or "")
-        if name == base_name or name.endswith(f"___{base_name}"):
+        if name == base_name or name.endswith(f"___{base_name}") or name.endswith(f"__{base_name}"):
             _resolved_tool_names[base_name] = name
             _tool_schemas[base_name] = tool
             return name
@@ -842,6 +1080,8 @@ def _call_gateway_tool(
     *,
     call_id: str | None = None,
     trace_id: str | None = None,
+    trace_context: Dict[str, Any] | None = None,
+    transport_retry_count: int = 0,
 ) -> Dict[str, Any]:
     """Call MCP tool via AgentCore Gateway with validation and retry logic.
     
@@ -877,6 +1117,14 @@ def _call_gateway_tool(
         raise ValueError(error_msg)
 
     idempotency_key = _build_idempotency_key(base_name, sanitized_arguments, trace_id)
+    resolved_trace_ctx = trace_context or build_trace_context(
+        trace_id=str(trace_id or ""),
+        session_id="",
+        agent_name="orchestrator",
+        tool_name=base_name,
+        schema_version="",
+        request_timestamp="",
+    )
     payload = {
         "jsonrpc": "2.0",
         "id": call_id,
@@ -891,6 +1139,16 @@ def _call_gateway_tool(
         trace_id,
     )
     
+    log_trace_event(
+        logger,
+        "gateway_tool_call_start",
+        resolved_trace_ctx,
+        payload={
+            "tool_name": base_name,
+            "call_id": call_id,
+            "resolved_name": resolved_name,
+        },
+    )
     try:
         data = _gateway_jsonrpc(
             payload,
@@ -899,21 +1157,29 @@ def _call_gateway_tool(
             extra_headers={
                 "Idempotency-Key": idempotency_key,
                 "X-Trace-Id": str(trace_id or ""),
+                **trace_headers(resolved_trace_ctx),
             },
         )
     except Exception as exc:
+        _reset_gateway_session()
+        log_trace_event(
+            logger,
+            "gateway_tool_call_error",
+            resolved_trace_ctx,
+            payload={"tool_name": base_name, "call_id": call_id, "error": str(exc)},
+        )
         raise _map_gateway_exception(exc, base_name=base_name, call_id=call_id, trace_id=trace_id) from exc
     result = data.get("result") or {}
+    log_trace_event(
+        logger,
+        "gateway_tool_call_end",
+        resolved_trace_ctx,
+        payload={"tool_name": base_name, "call_id": call_id},
+    )
     
     if bool(result.get("isError")):
         content = result.get("content", [])
-        detail = ""
-        if isinstance(content, list):
-            for item in content:
-                if isinstance(item, dict) and isinstance(item.get("text"), str):
-                    detail = item["text"].strip()
-                    if detail:
-                        break
+        detail = _extract_tool_error_detail(content)
         logger.warning(
             "Tool error: tool=%s call_id=%s trace_id=%s error=%s",
             base_name,
@@ -921,6 +1187,25 @@ def _call_gateway_tool(
             trace_id,
             detail,
         )
+        if transport_retry_count < _GATEWAY_DOWNSTREAM_TOOL_RETRY_LIMIT and _is_retryable_gateway_tool_error(detail):
+            logger.warning(
+                "Gateway downstream transport error detected; retrying with a fresh session: tool=%s call_id=%s trace_id=%s retry=%s/%s",
+                base_name,
+                call_id,
+                trace_id,
+                transport_retry_count + 1,
+                _GATEWAY_DOWNSTREAM_TOOL_RETRY_LIMIT,
+            )
+            _reset_gateway_session()
+            return _call_gateway_tool(
+                base_name,
+                arguments,
+                user_token,
+                call_id=call_id,
+                trace_id=trace_id,
+                trace_context=trace_context,
+                transport_retry_count=transport_retry_count + 1,
+            )
         raise ToolUnavailableError(
             f"Gateway tool error for {base_name}: {detail or 'unknown error'}",
             metadata={
@@ -973,7 +1258,14 @@ def _mock_forecast(horizon: str = "weekly_12") -> Dict[str, Any]:
     }
 
 
-def spend_analytics(user_token: str, user_id: str, range_days: str = "30d", trace_id: str | None = None) -> Dict[str, Any]:
+def spend_analytics(
+    user_token: str,
+    user_id: str,
+    range_days: str = "30d",
+    trace_id: str | None = None,
+    *,
+    trace_context: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     if _should_use_local_mocks():
         return _mock_spend(range_days)
     call_id = str(uuid.uuid4())
@@ -983,10 +1275,18 @@ def spend_analytics(user_token: str, user_id: str, range_days: str = "30d", trac
         user_token,
         call_id=call_id,
         trace_id=trace_id,
+        trace_context=trace_context,
     )
 
 
-def anomaly_signals(user_token: str, user_id: str, lookback_days: int = 90, trace_id: str | None = None) -> Dict[str, Any]:
+def anomaly_signals(
+    user_token: str,
+    user_id: str,
+    lookback_days: int = 90,
+    trace_id: str | None = None,
+    *,
+    trace_context: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     if _should_use_local_mocks():
         return {
             "lookback_days": lookback_days,
@@ -1001,6 +1301,7 @@ def anomaly_signals(user_token: str, user_id: str, lookback_days: int = 90, trac
         user_token,
         call_id=call_id,
         trace_id=trace_id,
+        trace_context=trace_context,
     )
 
 
@@ -1010,6 +1311,8 @@ def cashflow_forecast_tool(
     horizon: str = "weekly_12",
     scenario_overrides: Dict[str, Any] | None = None,
     trace_id: str | None = None,
+    *,
+    trace_context: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     if _should_use_local_mocks():
         return _mock_forecast(horizon)
@@ -1025,6 +1328,7 @@ def cashflow_forecast_tool(
         user_token,
         call_id=call_id,
         trace_id=trace_id,
+        trace_context=trace_context,
     )
 
 
@@ -1034,6 +1338,8 @@ def jar_allocation_suggest_tool(
     monthly_income_override: float | None = None,
     goal_overrides: list[Dict[str, Any]] | None = None,
     trace_id: str | None = None,
+    *,
+    trace_context: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     if _should_use_local_mocks():
         return {
@@ -1055,6 +1361,7 @@ def jar_allocation_suggest_tool(
         user_token,
         call_id=call_id,
         trace_id=trace_id,
+        trace_context=trace_context,
     )
 
 
@@ -1063,6 +1370,8 @@ def risk_profile_non_investment_tool(
     user_id: str,
     lookback_days: int = 180,
     trace_id: str | None = None,
+    *,
+    trace_context: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     if _should_use_local_mocks():
         return {
@@ -1080,6 +1389,7 @@ def risk_profile_non_investment_tool(
         user_token,
         call_id=call_id,
         trace_id=trace_id,
+        trace_context=trace_context,
     )
 
 
@@ -1090,6 +1400,8 @@ def suitability_guard_tool(
     requested_action: str,
     prompt: str,
     trace_id: str | None = None,
+    *,
+    trace_context: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     if _should_use_local_mocks():
         action = (requested_action or "").strip().lower()
@@ -1135,6 +1447,7 @@ def suitability_guard_tool(
         user_token,
         call_id=call_id,
         trace_id=trace_id,
+        trace_context=trace_context,
     )
 
 
@@ -1145,6 +1458,8 @@ def recurring_cashflow_detect_tool(
     min_occurrence_months: int = 3,
     recurring_overrides: list[Dict[str, Any]] | None = None,
     trace_id: str | None = None,
+    *,
+    trace_context: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     if _should_use_local_mocks():
         return {
@@ -1168,6 +1483,7 @@ def recurring_cashflow_detect_tool(
         user_token,
         call_id=call_id,
         trace_id=trace_id,
+        trace_context=trace_context,
     )
 
 
@@ -1179,6 +1495,8 @@ def goal_feasibility_tool(
     goal_id: str | None = None,
     seasonality: bool = True,
     trace_id: str | None = None,
+    *,
+    trace_context: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     if _should_use_local_mocks():
         return {
@@ -1202,6 +1520,7 @@ def goal_feasibility_tool(
         user_token,
         call_id=call_id,
         trace_id=trace_id,
+        trace_context=trace_context,
     )
 
 
@@ -1214,6 +1533,8 @@ def what_if_scenario_tool(
     base_scenario_overrides: Dict[str, Any] | None = None,
     variants: list[Dict[str, Any]] | None = None,
     trace_id: str | None = None,
+    *,
+    trace_context: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     if _should_use_local_mocks():
         return {
@@ -1240,6 +1561,7 @@ def what_if_scenario_tool(
         user_token,
         call_id=call_id,
         trace_id=trace_id,
+        trace_context=trace_context,
     )
 
 

@@ -1,0 +1,24 @@
+{
+  "name": "REPLACE_ME_GATEWAY_NAME",
+  "description": "Specialist MCP gateway for the new planner-in-process architecture",
+  "clientToken": "REPLACE_ME_UNIQUE_GATEWAY_CLIENT_TOKEN",
+  "roleArn": "REPLACE_ME_GATEWAY_ROLE_ARN",
+  "protocolType": "MCP",
+  "protocolConfiguration": {
+    "mcp": {
+      "supportedVersions": ["2025-03-26"]
+    }
+  },
+  "authorizerType": "CUSTOM_JWT",
+  "authorizerConfiguration": {
+    "customJWTAuthorizer": {
+      "discoveryUrl": "REPLACE_ME_COGNITO_DISCOVERY_URL",
+      "allowedClients": REPLACE_ME_COGNITO_ALLOWED_CLIENTS_JSON
+    }
+  },
+  "exceptionLevel": "DEBUG",
+  "tags": {
+    "project": "jars",
+    "architecture": "specialist"
+  }
+}

@@ -1,0 +1,8 @@
+backend/.env
+backend/.env.local
+frontend/.env
+frontend/.env.local
+agent/.env
+agent/.env.local
+src/aws-specialist-agent-mcp-server/.env
+src/aws-specialist-agent-mcp-server/.env.local

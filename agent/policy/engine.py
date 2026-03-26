@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, Set
 
-from core.settings import POLICY_ADAPTER, POLICY_ALLOWED_TOOLS
+from core.settings import ALLOW_LEGACY_LOCAL_AUTH, POLICY_ADAPTER, POLICY_ALLOWED_TOOLS
 
 from .contracts import PolicyDecision
 
@@ -15,7 +15,14 @@ class SimplePolicyEngine:
 
     def authorize_tool_call(self, tool_name: str, *, context: Dict[str, Any]) -> PolicyDecision:
         if not self._allowed_tools:
-            return PolicyDecision(allow=True, reason_codes=["policy_allow_default"])
+            if ALLOW_LEGACY_LOCAL_AUTH:
+                return PolicyDecision(allow=True, reason_codes=["policy_allow_default_local_only"])
+            return PolicyDecision(
+                allow=False,
+                reason_codes=["policy_no_allowed_tools_configured"],
+                deny_code="POLICY_DENY",
+                metadata={"tool_name": tool_name, "context_keys": sorted(context.keys())},
+            )
         if tool_name in self._allowed_tools:
             return PolicyDecision(allow=True, reason_codes=["policy_allow_tool_whitelist"])
         return PolicyDecision(

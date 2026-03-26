@@ -5,11 +5,12 @@ from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 
-# Always load backend/.env regardless of current working directory.
-# main.py is at backend/app/main.py -> backend/.env is parents[1]/.env
+# Always resolve backend/.env relative to the backend package.
+# Local files may provide defaults for developer workflows, but deployed
+# runtime environment variables remain the source of truth.
 ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 # Read .env as UTF-8 with BOM support to avoid malformed first key (e.g. AWS_REGION).
-load_dotenv(ENV_PATH, override=True, encoding="utf-8-sig")
+load_dotenv(ENV_PATH, override=False, encoding="utf-8-sig")
 
 from app.routes import (  # noqa: E402
     audit,

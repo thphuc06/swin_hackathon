@@ -1,3 +1,9 @@
+"""Fixture/demo provisioning utility for advisory seed data.
+
+This script prepares Supabase demo data for a single user. It is not used by
+the deployed backend, orchestrator, or specialist runtime paths.
+"""
+
 from __future__ import annotations
 
 import argparse

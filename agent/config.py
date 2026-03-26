@@ -1,4 +1,5 @@
 import os
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 env_path = os.path.join(os.path.dirname(__file__), ".env")
@@ -32,7 +33,49 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-AWS_REGION = os.getenv("AWS_REGION", "us-west-2")
+VALID_APP_ENVS = {"local", "demo", "staging", "prod"}
+DEPLOYED_APP_ENVS = {"staging", "prod"}
+
+
+def _env_str(name: str, default: str = "") -> str:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip()
+
+
+def _resolve_app_env() -> str:
+    raw = _env_str("APP_ENV", "").lower()
+    if not raw:
+        return "local"
+    if raw not in VALID_APP_ENVS:
+        raise RuntimeError("APP_ENV must be one of: local, demo, staging, prod.")
+    return raw
+
+
+APP_ENV = _resolve_app_env()
+IS_DEPLOYED_ENV = APP_ENV in DEPLOYED_APP_ENVS
+
+
+def _required_in_deployed(name: str, *, local_default: str = "") -> str:
+    value = _env_str(name, "")
+    if value:
+        return value
+    if IS_DEPLOYED_ENV:
+        raise RuntimeError(f"{name} must be explicitly set when APP_ENV is staging or prod.")
+    return local_default
+
+
+def _is_local_address(value: str) -> bool:
+    try:
+        host = urlparse(value).hostname or ""
+    except ValueError:
+        host = ""
+    host = host.strip().lower()
+    return host in {"localhost", "127.0.0.1"} or host.endswith(".local")
+
+
+AWS_REGION = _required_in_deployed("AWS_REGION", local_default="us-east-1")
 BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "")
 BEDROCK_GUARDRAIL_ID = os.getenv("BEDROCK_GUARDRAIL_ID", "")
 BEDROCK_GUARDRAIL_VERSION = os.getenv("BEDROCK_GUARDRAIL_VERSION", "DRAFT")
@@ -41,12 +84,20 @@ BEDROCK_GUARDRAIL_VERSION = os.getenv("BEDROCK_GUARDRAIL_VERSION", "DRAFT")
 # BEDROCK_KB_ID = os.getenv("BEDROCK_KB_ID", "")
 BEDROCK_KB_ID = ""  # Unused - local KB implementation
 
-AGENTCORE_GATEWAY_ENDPOINT = os.getenv("AGENTCORE_GATEWAY_ENDPOINT", "")
+AGENTCORE_GATEWAY_ENDPOINT = _required_in_deployed("AGENTCORE_GATEWAY_ENDPOINT", local_default="")
 AGENTCORE_GATEWAY_TOOL_NAME = os.getenv("AGENTCORE_GATEWAY_TOOL_NAME", "")
 AGENTCORE_MEMORY_ID = os.getenv("AGENTCORE_MEMORY_ID", "")
 
-BACKEND_API_BASE = os.getenv("BACKEND_API_BASE", "http://localhost:8010")
+BACKEND_API_BASE = _required_in_deployed("BACKEND_API_BASE", local_default="http://localhost:8010")
 USE_LOCAL_MOCKS = _env_bool("USE_LOCAL_MOCKS", False)
+if IS_DEPLOYED_ENV:
+    if _is_local_address(BACKEND_API_BASE):
+        raise RuntimeError("BACKEND_API_BASE must not point to localhost in staging/prod.")
+    if _is_local_address(AGENTCORE_GATEWAY_ENDPOINT):
+        raise RuntimeError("AGENTCORE_GATEWAY_ENDPOINT must not point to localhost in staging/prod.")
+    if USE_LOCAL_MOCKS:
+        raise RuntimeError("USE_LOCAL_MOCKS=true is forbidden in staging/prod.")
+
 ROUTER_MODE = os.getenv("ROUTER_MODE", "semantic_enforce").strip().lower()
 if ROUTER_MODE not in {"rule", "semantic_shadow", "semantic_enforce"}:
     ROUTER_MODE = "semantic_enforce"
@@ -100,8 +151,8 @@ if ENCODING_NORMALIZATION_FORM not in {"NFC", "NFD", "NFKC", "NFKD"}:
 # TIMEOUT CONFIGURATION (Centralized)
 # ============================================================================
 # Agent execution timeouts
-AGENT_TIMEOUT_SECONDS = _env_int("AGENT_TIMEOUT_SECONDS", 120)
-GATEWAY_TIMEOUT_SECONDS = _env_int("GATEWAY_TIMEOUT_SECONDS", 25)
+AGENT_TIMEOUT_SECONDS = _env_int("AGENT_TIMEOUT_SECONDS", 300)
+GATEWAY_TIMEOUT_SECONDS = _env_int("GATEWAY_TIMEOUT_SECONDS", 300)
 BACKEND_TIMEOUT_SECONDS = _env_int("BACKEND_TIMEOUT_SECONDS", 20)
 GATEWAY_CIRCUIT_BREAKER_ENABLED = _env_bool("GATEWAY_CIRCUIT_BREAKER_ENABLED", True)
 GATEWAY_BREAKER_FAILURE_THRESHOLD = max(1, _env_int("GATEWAY_BREAKER_FAILURE_THRESHOLD", 3))
@@ -113,7 +164,7 @@ BEDROCK_CONNECT_TIMEOUT = _env_int("BEDROCK_CONNECT_TIMEOUT", 10)
 BEDROCK_READ_TIMEOUT = _env_int("BEDROCK_READ_TIMEOUT", 120)  # Increased from 60s for large Vietnamese responses
 
 # Tool execution timeouts
-TOOL_EXECUTION_TIMEOUT = _env_int("TOOL_EXECUTION_TIMEOUT", 120)  # ThreadPoolExecutor global timeout
+TOOL_EXECUTION_TIMEOUT = _env_int("TOOL_EXECUTION_TIMEOUT", 300)  # ThreadPoolExecutor global timeout
 
 # Session memory (Phase 2)
 SESSION_MEMORY_ENABLED = _env_bool("SESSION_MEMORY_ENABLED", True)

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import re
 import time
 import unicodedata
+import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError, as_completed
 from typing import Any, Dict, TypedDict
 
@@ -26,11 +27,13 @@ from core.models import (
 )
 from core.settings import RETRIEVAL_ADAPTER
 from observability.audit_logger import emit_trace_event
+from observability.trace_context import build_trace_context, utc_now_iso
 from observability.tracing import make_idempotency_key, new_request_id, new_trace_id
 from policy.engine import get_policy_engine
 from retrieval.factory import get_index_client
 
 from config import (
+    APP_ENV,
     ENCODING_FAILFAST_SCORE_MIN,
     ENCODING_GATE_ENABLED,
     ENCODING_NORMALIZATION_FORM,
@@ -60,6 +63,16 @@ from config import (
 )
 from encoding import apply_prompt_encoding_gate
 from memory.session_memory import load_session, save_session
+from orchestrator_policy import (
+    HEURISTIC_RECOVERY_POLICY_VERSION,
+    default_scenario_variants as policy_default_scenario_variants,
+    get_degradation_policy,
+    recover_intent_from_prompt,
+    resolve_lookback_days as policy_resolve_lookback_days,
+    resolve_lookback_months as policy_resolve_lookback_months,
+    resolve_summary_range as policy_resolve_summary_range,
+    scenario_default_horizon_months,
+)
 from router import (
     ClarifyingQuestionV1,
     RouteDecisionV1,
@@ -76,6 +89,12 @@ from response import (
     render_facts_only_compact_response,
     synthesize_answer_plan_with_bedrock,
     validate_answer_grounding,
+)
+from strands_orchestrator.specialist import (
+    build_specialist_payload,
+    call_specialist_tool,
+    get_specialist_by_id,
+    validate_specialist_output,
 )
 from tools import (
     anomaly_signals,
@@ -120,6 +139,8 @@ class AgentState(TypedDict):
     tool_errors: Dict[str, Any]
     selected_agent: str
     agent_outputs: Dict[str, Any]
+    planner_context: Dict[str, Any]
+    roadmap_payload: Dict[str, Any]
     response: str
     trace_id: str
 
@@ -406,36 +427,8 @@ def _resolve_pending_clarification_answer(
 
 
 def _heuristic_intent_from_prompt(prompt: str) -> str | None:
-    text = str(prompt or "").strip().lower()
-    if not text:
-        return None
-    text_ascii = _strip_accents(text)
-    flat = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9% ]+", " ", text_ascii)).strip()
-
-    scenario_markers = ("neu", "gia su", "what if", "what-if", "if i", "ra sao", "how would", "what would")
-    delta_markers = ("giam", "tang", "delta", "%", "pct", "thay doi", "reduce", "increase", "cut")
-    risk_markers = ("rui ro", "risk", "canh bao", "warning", "anomaly", "bat thuong")
-    planning_markers = ("ke hoach", "muc tieu", "tiet kiem", "goal", "plan", "feasibility")
-    summary_markers = ("summary", "overview", "tom tat", "tong quan", "spending", "cashflow", "chi tieu")
-
-    has_scenario = any(marker in flat for marker in scenario_markers)
-    has_delta = any(marker in flat for marker in delta_markers)
-    if not has_scenario and "%" in text and ("ra sao" in flat or "thay" in flat):
-        has_scenario = True
-        has_delta = True
-    if has_scenario and has_delta:
-        return "scenario"
-
-    if any(marker in flat for marker in risk_markers):
-        return "risk"
-    if any(marker in flat for marker in planning_markers):
-        return "planning"
-    if any(marker in flat for marker in summary_markers):
-        return "summary"
-    # Last-resort summary for mojibake-like prompts that keep day window and spend hints.
-    if re.search(r"\b(30|60|90)\b", flat) and ("chi" in flat or "spend" in flat):
-        return "summary"
-    return None
+    intent, _ = recover_intent_from_prompt(prompt)
+    return intent
 
 
 def _tool_retry_count(tool_result: Dict[str, Any] | Exception | None) -> int:
@@ -689,20 +682,7 @@ def _extract_goal_request(prompt: str) -> Dict[str, Any]:
 
 
 def _scenario_default_variants() -> list[Dict[str, Any]]:
-    return [
-        {
-            "name": "cut_discretionary_spend_15pct",
-            "scenario_overrides": {"spend_delta_pct": -0.15},
-        },
-        {
-            "name": "increase_income_10pct",
-            "scenario_overrides": {"income_delta_pct": 0.10},
-        },
-        {
-            "name": "balanced_income_up5_spend_down10",
-            "scenario_overrides": {"income_delta_pct": 0.05, "spend_delta_pct": -0.10},
-        },
-    ]
+    return policy_default_scenario_variants()
 
 
 def _scenario_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
@@ -885,14 +865,7 @@ def _slot_lookback_months(slots: Dict[str, Any] | None) -> int:
 
 
 def _resolve_summary_range(prompt: str, intent: str, slots: Dict[str, Any] | None = None) -> str:
-    normalized = _normalize_text(prompt)
-    requested_days = _extract_requested_days(normalized)
-    if requested_days <= 0:
-        requested_days = _slot_range_days(slots)
-    if requested_days <= 0:
-        requested_days = 90 if intent == "risk" else 30
-    requested_days = max(1, min(365, requested_days))
-    return f"{requested_days}d"
+    return policy_resolve_summary_range(prompt, intent, slots)
 
 
 def _resolve_lookback_days(
@@ -903,12 +876,8 @@ def _resolve_lookback_days(
     min_days: int,
     max_days: int,
 ) -> int:
-    requested_days = _extract_requested_days(_normalize_text(prompt))
-    if requested_days <= 0:
-        requested_days = _slot_range_days(slots)
-    if requested_days <= 0:
-        requested_days = default_days
-    return max(min_days, min(max_days, requested_days))
+    policy_key = "anomaly_signals_v1" if default_days <= 90 else "risk_profile_non_investment_v1"
+    return policy_resolve_lookback_days(prompt=prompt, slots=slots, policy_key=policy_key)
 
 
 def _resolve_lookback_months(
@@ -919,12 +888,11 @@ def _resolve_lookback_months(
     min_months: int,
     max_months: int,
 ) -> int:
-    requested_months = _extract_requested_months(_normalize_text(prompt))
-    if requested_months <= 0:
-        requested_months = _slot_lookback_months(slots)
-    if requested_months <= 0:
-        requested_months = default_months
-    return max(min_months, min(max_months, requested_months))
+    return policy_resolve_lookback_months(
+        prompt=prompt,
+        slots=slots,
+        policy_key="recurring_cashflow_detect_v1",
+    )
 
 
 def _build_kb_query(prompt: str, intent: str) -> str:
@@ -1593,8 +1561,9 @@ def _build_scenario_request_from_slots(slots: Dict[str, Any], fallback: Dict[str
     if not isinstance(slots, dict):
         return fallback_payload
 
-    horizon_months = _safe_int(slots.get("horizon_months"), _safe_int(fallback_payload.get("horizon_months"), 12))
-    horizon_months = max(1, min(24, horizon_months or 12))
+    default_horizon_months = scenario_default_horizon_months()
+    horizon_months = _safe_int(slots.get("horizon_months"), _safe_int(fallback_payload.get("horizon_months"), default_horizon_months))
+    horizon_months = max(1, min(24, horizon_months or default_horizon_months))
     goal = str(slots.get("goal") or fallback_payload.get("goal") or "maximize_savings")
     seasonality = bool(slots.get("seasonality", fallback_payload.get("seasonality", True)))
 
@@ -1968,7 +1937,7 @@ def intent_router(state: AgentState) -> AgentState:
     extraction, extraction_errors, extraction_meta = extract_intent_with_bedrock(prompt_for_extraction, retry_attempts=1)
     if extraction is None:
         fallback_reason_codes = [*extraction_errors, "structured_invalid_no_rule_fallback"]
-        heuristic_intent = _heuristic_intent_from_prompt(prompt)
+        heuristic_intent, heuristic_rule_id = recover_intent_from_prompt(prompt)
         if heuristic_intent is not None:
             recovered = RouteDecisionV1(
                 mode=effective_mode if effective_mode in {"semantic_shadow", "semantic_enforce"} else "semantic_enforce",
@@ -1976,7 +1945,12 @@ def intent_router(state: AgentState) -> AgentState:
                 final_intent=heuristic_intent,
                 tool_bundle=tool_bundle_for_intent(heuristic_intent),
                 clarify_needed=False,
-                reason_codes=[*fallback_reason_codes, "intent_heuristic_recovery"],
+                reason_codes=[
+                    *fallback_reason_codes,
+                    "intent_heuristic_recovery",
+                    f"intent_heuristic_policy:{HEURISTIC_RECOVERY_POLICY_VERSION}",
+                    f"intent_heuristic_rule:{heuristic_rule_id}",
+                ],
                 fallback_used="structured_invalid_heuristic_recovery",
                 source="semantic",
             )
@@ -1986,12 +1960,27 @@ def intent_router(state: AgentState) -> AgentState:
                 "errors": extraction_errors,
                 "meta": extraction_meta,
                 "heuristic_intent": heuristic_intent,
+                "heuristic_rule_id": heuristic_rule_id,
+                "heuristic_policy_version": HEURISTIC_RECOVERY_POLICY_VERSION,
             }
             if heuristic_intent == "scenario":
                 state["scenario_request"] = _build_scenario_request_from_slots({}, {})
+            emit_trace_event(
+                trace_id=state.get("trace_id", ""),
+                stage="routing",
+                outcome="heuristic_recovery",
+                payload={
+                    "heuristic_intent": heuristic_intent,
+                    "heuristic_rule_id": heuristic_rule_id,
+                    "heuristic_policy_version": HEURISTIC_RECOVERY_POLICY_VERSION,
+                    "router_mode": effective_mode,
+                },
+            )
             logger.warning(
-                "Semantic extraction failed; recovered with heuristic intent=%s errors=%s",
+                "Semantic extraction failed; recovered with heuristic intent=%s rule=%s policy=%s errors=%s",
                 heuristic_intent,
+                heuristic_rule_id,
+                HEURISTIC_RECOVERY_POLICY_VERSION,
                 extraction_errors,
             )
             return state
@@ -2213,6 +2202,14 @@ def suitability_guard(state: AgentState) -> AgentState:
 
     requested_action = _requested_action(state["prompt"])
     try:
+        trace_ctx = build_trace_context(
+            trace_id=str(state.get("trace_id") or ""),
+            session_id=str(state.get("session_id") or ""),
+            agent_name="orchestrator",
+            tool_name="suitability_guard_v1",
+            schema_version="",
+            request_timestamp=str(state.get("request_timestamp") or ""),
+        )
         decision = suitability_guard_tool(
             state["user_token"],
             user_id=state["user_id"],
@@ -2220,6 +2217,7 @@ def suitability_guard(state: AgentState) -> AgentState:
             requested_action=requested_action,
             prompt=state["prompt"],
             trace_id=state["trace_id"],
+            trace_context=trace_ctx,
         )
     except Exception as exc:
         _record_tool_error(state, "suitability_guard_v1", exc)
@@ -2369,7 +2367,7 @@ def _build_stock_agent_request(state: AgentState, extraction_slots: Dict[str, An
         anomaly_flags=anomaly_flags,
     )
     return StockAdvisoryRequest(
-        user_id=str(state.get("user_id") or "demo-user"),
+        user_id=str(state.get("user_id") or ""),
         query=str(state.get("prompt") or ""),
         risk_profile=risk_profile,
         constraints=constraints,
@@ -2428,7 +2426,8 @@ def select_agent(state: AgentState) -> AgentState:
 
 
 def _should_degrade_tool_failure(tool_name: str, exc: Exception) -> bool:
-    if not DEGRADED_MODE_ENABLED:
+    degradation_policy = get_degradation_policy(APP_ENV)
+    if not DEGRADED_MODE_ENABLED or not degradation_policy.tool_unavailable_fallback_enabled:
         return False
     if tool_name == "suitability_guard_v1":
         return False
@@ -2475,6 +2474,14 @@ def _tool_degraded_fallback_payload(tool_name: str, state: AgentState, exc: Exce
 def _execute_tool_safe(tool_name: str, state: AgentState, extraction_slots: Dict[str, Any]) -> tuple[str, Dict[str, Any] | Exception]:
     """Execute a single tool with error handling. Returns (tool_name, result_or_exception)."""
     try:
+        trace_ctx = build_trace_context(
+            trace_id=str(state.get("trace_id") or ""),
+            session_id=str(state.get("session_id") or ""),
+            agent_name="orchestrator",
+            tool_name=tool_name,
+            schema_version="",
+            request_timestamp=str(state.get("request_timestamp") or ""),
+        )
         if tool_name == "suitability_guard_v1":
             # Skip - executed in dedicated suitability node
             return tool_name, {"skipped": True}
@@ -2489,6 +2496,7 @@ def _execute_tool_safe(tool_name: str, state: AgentState, extraction_slots: Dict
                 user_id=state["user_id"],
                 range_days=range_days,
                 trace_id=state["trace_id"],
+                trace_context=trace_ctx,
             )
             return tool_name, result
 
@@ -2500,6 +2508,7 @@ def _execute_tool_safe(tool_name: str, state: AgentState, extraction_slots: Dict
                 user_id=state["user_id"],
                 horizon=horizon,
                 trace_id=state["trace_id"],
+                trace_context=trace_ctx,
             )
             return tool_name, result
 
@@ -2516,6 +2525,7 @@ def _execute_tool_safe(tool_name: str, state: AgentState, extraction_slots: Dict
                 user_id=state["user_id"],
                 lookback_days=lookback_days,
                 trace_id=state["trace_id"],
+                trace_context=trace_ctx,
             )
             return tool_name, result
 
@@ -2532,6 +2542,7 @@ def _execute_tool_safe(tool_name: str, state: AgentState, extraction_slots: Dict
                 user_id=state["user_id"],
                 lookback_days=lookback_days,
                 trace_id=state["trace_id"],
+                trace_context=trace_ctx,
             )
             return tool_name, result
 
@@ -2552,6 +2563,7 @@ def _execute_tool_safe(tool_name: str, state: AgentState, extraction_slots: Dict
                     min(12, _safe_int(extraction_slots.get("min_occurrence_months"), 3) or 3),
                 ),
                 trace_id=state["trace_id"],
+                trace_context=trace_ctx,
             )
             return tool_name, result
 
@@ -2578,6 +2590,7 @@ def _execute_tool_safe(tool_name: str, state: AgentState, extraction_slots: Dict
                 horizon_months=normalized_horizon if normalized_horizon > 0 else None,
                 goal_id=goal_id,
                 trace_id=state["trace_id"],
+                trace_context=trace_ctx,
             )
             return tool_name, result
 
@@ -2586,6 +2599,7 @@ def _execute_tool_safe(tool_name: str, state: AgentState, extraction_slots: Dict
                 state["user_token"],
                 user_id=state["user_id"],
                 trace_id=state["trace_id"],
+                trace_context=trace_ctx,
             )
             return tool_name, result
 
@@ -2602,7 +2616,38 @@ def _execute_tool_safe(tool_name: str, state: AgentState, extraction_slots: Dict
                 base_scenario_overrides=scenario_request.get("base_scenario_overrides") or {},
                 variants=scenario_request.get("variants") or [],
                 trace_id=state["trace_id"],
+                trace_context=trace_ctx,
             )
+            return tool_name, result
+
+        if tool_name == "run_service_agent_v1":
+            descriptor = get_specialist_by_id("service")
+            if descriptor is None:
+                raise ToolUnavailableError(
+                    "Service specialist descriptor is not available.",
+                    metadata={"tool": tool_name, "trace_id": state.get("trace_id", "")},
+                )
+
+            payload = build_specialist_payload(descriptor, state)
+            result = call_specialist_tool(
+                descriptor,
+                payload,
+                state["user_token"],
+                trace_id=state["trace_id"],
+                trace_context=trace_ctx,
+            )
+
+            if isinstance(result, dict):
+                try:
+                    validate_specialist_output(descriptor.output_schema, result)
+                except Exception as schema_exc:
+                    logger.warning(
+                        "Service specialist output schema validation failed: trace=%s error=%s",
+                        state.get("trace_id"),
+                        schema_exc,
+                    )
+                    _append_response_reason_codes(state, ["service_output_schema_validation_failed"])
+
             return tool_name, result
 
         if tool_name == "stock_agent_external_v1":
@@ -2623,6 +2668,8 @@ def _execute_tool_safe(tool_name: str, state: AgentState, extraction_slots: Dict
                     trace_id=state["trace_id"],
                     request_id=request_id,
                     idempotency_key=idempotency_key,
+                    session_id=str(state.get("session_id") or ""),
+                    request_timestamp=str(state.get("request_timestamp") or ""),
                 )
                 return tool_name, {
                     "status": "ok",
@@ -2848,9 +2895,10 @@ def decision_engine(state: AgentState) -> AgentState:
 
 
 def _response_mode() -> str:
+    degradation_policy = get_degradation_policy(APP_ENV)
     mode = str(RESPONSE_MODE or "llm_shadow").strip().lower()
-    if mode not in {"template", "llm_shadow", "llm_enforce"}:
-        return "llm_shadow"
+    if mode not in degradation_policy.allowed_response_modes:
+        return degradation_policy.default_response_mode
     return mode
 
 
@@ -2906,6 +2954,7 @@ def reasoning(state: AgentState) -> AgentState:
     vietnamese = _is_vietnamese_prompt(state.get("prompt", ""))
     language = "vi" if vietnamese else "en"
     mode = _response_mode()
+    degradation_policy = get_degradation_policy(APP_ENV)
     default_disclaimer = _resolve_required_disclaimer(state)
     existing_meta = state.get("response_meta") if isinstance(state.get("response_meta"), dict) else {}
     encoding_reason_codes = existing_meta.get("encoding_reason_codes")
@@ -2946,7 +2995,7 @@ def reasoning(state: AgentState) -> AgentState:
         response_meta.update(
             {
                 "validation_passed": True,
-                "fallback_used": "clarification_pending",
+                "fallback_used": degradation_policy.clarification_fallback,
             }
         )
         state["response_meta"] = response_meta
@@ -3014,7 +3063,7 @@ def reasoning(state: AgentState) -> AgentState:
         response_meta.update(
             {
                 "validation_passed": True,
-                "fallback_used": "template_mode",
+                "fallback_used": degradation_policy.template_fallback,
                 "disclaimer_effective": default_disclaimer,
             }
         )
@@ -3069,7 +3118,7 @@ def reasoning(state: AgentState) -> AgentState:
             if retry_plan is not None:
                 answer_plan = retry_plan
         if answer_plan is None:
-            fallback_used = "answer_synthesis_failed"
+            fallback_used = degradation_policy.llm_failure_fallback
     if answer_plan is not None:
         validation_errors = validate_answer_grounding(
             answer_plan,
@@ -3127,7 +3176,7 @@ def reasoning(state: AgentState) -> AgentState:
 
         if validation_errors:
             response_meta["reason_codes"].extend(validation_errors)
-            fallback_used = "grounding_failed"
+            fallback_used = degradation_policy.grounding_failure_fallback
         else:
             state["answer_plan_v2"] = answer_plan.model_dump(exclude_none=True)
             llm_body = render_answer_plan(answer_plan, advisory_context)
@@ -3138,7 +3187,7 @@ def reasoning(state: AgentState) -> AgentState:
             response_meta["disclaimer_effective"] = str(answer_plan.disclaimer or default_disclaimer).strip() or default_disclaimer
 
     if not llm_body:
-        response_meta["fallback_used"] = fallback_used or "facts_only_compact_renderer"
+        response_meta["fallback_used"] = fallback_used or degradation_policy.facts_only_fallback
         llm_body = render_facts_only_compact_response(
             advisory_context,
             language=language,
@@ -3219,6 +3268,78 @@ def _build_session_memory_payload(state: AgentState) -> Dict[str, Any]:
             "scenario_request": state.get("scenario_request", {}) if isinstance(state.get("scenario_request"), dict) else {},
             "updated_at": _utc_now_iso(),
         }
+    agent_outputs = state.get("agent_outputs", {}) if isinstance(state.get("agent_outputs"), dict) else {}
+    planner_output = agent_outputs.get("planner") if isinstance(agent_outputs.get("planner"), dict) else {}
+    planner_contract = (
+        planner_output.get("standardized_contract")
+        if isinstance(planner_output.get("standardized_contract"), dict)
+        else {}
+    )
+    planner_result = planner_output.get("result") if isinstance(planner_output.get("result"), dict) else {}
+    stock_output = agent_outputs.get("stock") if isinstance(agent_outputs.get("stock"), dict) else {}
+    stock_result = stock_output.get("result") if isinstance(stock_output.get("result"), dict) else {}
+    stock_suitability = stock_result.get("suitability") if isinstance(stock_result.get("suitability"), dict) else {}
+    stock_warnings = stock_output.get("warnings") if isinstance(stock_output.get("warnings"), list) else stock_result.get("warnings")
+    stock_alternatives = stock_result.get("alternatives") if isinstance(stock_result.get("alternatives"), list) else []
+    last_stock_context = existing.get("last_stock_context") if isinstance(existing.get("last_stock_context"), dict) else {}
+    if stock_output:
+        warning_flags: list[str] = []
+        for item in stock_warnings if isinstance(stock_warnings, list) else []:
+            if isinstance(item, dict):
+                for part in (str(item.get("code") or "").strip(), str(item.get("message") or "").strip()):
+                    if part and part not in warning_flags:
+                        warning_flags.append(part)
+            else:
+                text = str(item or "").strip()
+                if text and text not in warning_flags:
+                    warning_flags.append(text)
+        market_notes = [str(item).strip() for item in stock_result.get("market_notes", []) if str(item).strip()] if isinstance(stock_result.get("market_notes"), list) else []
+        if not market_notes:
+            for item in stock_alternatives[:3]:
+                if not isinstance(item, dict):
+                    continue
+                rationale = str(item.get("rationale") or "").strip()
+                if rationale and rationale not in market_notes:
+                    market_notes.append(rationale)
+        cited_symbols: list[str] = []
+        for collection in (
+            stock_result.get("recommendations") if isinstance(stock_result.get("recommendations"), list) else [],
+            stock_alternatives,
+        ):
+            for item in collection:
+                if not isinstance(item, dict):
+                    continue
+                symbol = str(item.get("ticker") or item.get("symbol") or "").strip()
+                if symbol and symbol not in cited_symbols:
+                    cited_symbols.append(symbol)
+        suitability_status = str(stock_suitability.get("status") or (stock_output.get("policy") or {}).get("suitability") or "").strip()
+        market_tone = str(stock_result.get("market_tone") or stock_output.get("market_tone") or "").strip()
+        if not market_tone:
+            lowered_summary = str(stock_result.get("summary") or stock_output.get("summary") or "").strip().lower()
+            if suitability_status.lower() in {"warn", "fail", "deny", "blocked"} or warning_flags:
+                market_tone = "cautious"
+            elif suitability_status.lower() == "pass":
+                market_tone = "constructive"
+            elif any(marker in lowered_summary for marker in ("risk", "volatile", "uncertain", "cautious")):
+                market_tone = "cautious"
+
+        computed_stock_context: Dict[str, Any] = {}
+        summary = str(stock_result.get("summary") or stock_output.get("summary") or "").strip()
+        if summary:
+            computed_stock_context["summary"] = summary
+        if suitability_status:
+            computed_stock_context["suitability_status"] = suitability_status
+        if market_tone:
+            computed_stock_context["market_tone"] = market_tone
+        if market_notes:
+            computed_stock_context["market_notes"] = market_notes
+        if warning_flags:
+            computed_stock_context["warning_flags"] = warning_flags
+        if cited_symbols:
+            computed_stock_context["cited_symbols"] = cited_symbols
+        if computed_stock_context:
+            computed_stock_context["source"] = str(stock_output.get("tool_name") or stock_output.get("agent_id") or "stock").strip()
+            last_stock_context = computed_stock_context
     payload: Dict[str, Any] = {
         "schema_version": "session_memory_v1",
         "updated_at": _utc_now_iso(),
@@ -3238,6 +3359,9 @@ def _build_session_memory_payload(state: AgentState) -> Dict[str, Any]:
             else {}
         ),
         "pending_clarification": pending_clarification,
+        "last_planner_summary": str(planner_result.get("summary") or "").strip(),
+        "last_planner_contract": planner_contract,
+        "last_stock_context": last_stock_context,
         "turns": turns,
     }
     redacted_payload = _redact_memory_value(payload)
@@ -3354,10 +3478,27 @@ def build_graph() -> Any:
     return _build_legacy_graph()
 
 
-def run_agent(prompt: str, user_token: str, user_id: str, session_id: str | None = None) -> Dict[str, Any]:
-    trace_id = new_trace_id()
+def run_agent(
+    prompt: str,
+    user_token: str,
+    user_id: str,
+    session_id: str | None = None,
+    *,
+    trace_id: str | None = None,
+    request_timestamp: str | None = None,
+) -> Dict[str, Any]:
+    trace_id = str(trace_id or "").strip() or new_trace_id()
     request_id = new_request_id()
-    resolved_session_id = str(session_id or "").strip() or f"{str(user_id or 'demo-user').strip()}:default"
+    resolved_session_id = str(session_id or "").strip() or f"sess_{uuid.uuid4().hex}"
+    request_timestamp = str(request_timestamp or "").strip() or utc_now_iso()
+    trace_ctx = build_trace_context(
+        trace_id=trace_id,
+        session_id=resolved_session_id,
+        agent_name="orchestrator",
+        tool_name="orchestrator",
+        schema_version="v1",
+        request_timestamp=request_timestamp,
+    )
     graph = build_graph()
     state = graph.invoke(
         {
@@ -3366,6 +3507,8 @@ def run_agent(prompt: str, user_token: str, user_id: str, session_id: str | None
             "user_id": user_id,
             "request_id": request_id,
             "session_id": resolved_session_id,
+            "request_timestamp": request_timestamp,
+            "trace_ctx": trace_ctx,
             "session_memory": {},
             "intent": "",
             "scenario_request": {},

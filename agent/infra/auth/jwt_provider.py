@@ -4,7 +4,7 @@ import base64
 import json
 from typing import Any, Dict
 
-from core.settings import AUTH_DEV_BYPASS
+from core.settings import ALLOW_LEGACY_LOCAL_AUTH, APP_ENV, AUTH_DEV_BYPASS
 
 from .provider import AuthResult
 
@@ -23,13 +23,17 @@ def _decode_payload_without_verify(token: str) -> Dict[str, Any]:
 class JwtAuthProvider:
     """Lightweight provider for local/dev non-Cognito auth."""
 
+    def __init__(self) -> None:
+        if not ALLOW_LEGACY_LOCAL_AUTH:
+            raise RuntimeError("JwtAuthProvider is restricted to APP_ENV=local or APP_ENV=demo.")
+
     def verify(self, authorization: str | None) -> AuthResult:
         if AUTH_DEV_BYPASS:
             return AuthResult(
                 authenticated=True,
                 subject="demo-user",
-                claims={"sub": "demo-user", "scope": "dev:bypass"},
-                reason="auth_dev_bypass",
+                claims={"sub": "demo-user", "scope": "dev:bypass", "app_env": APP_ENV},
+                reason="auth_dev_bypass_local_only",
             )
 
         if not authorization or not str(authorization).strip():
@@ -43,8 +47,9 @@ class JwtAuthProvider:
             claims = _decode_payload_without_verify(token_value)
             subject = str(claims.get("sub") or claims.get("username") or "").strip()
             if not subject:
-                subject = "anonymous"
-            return AuthResult(authenticated=True, subject=subject, claims=claims, reason="jwt_unverified_decode")
+                return AuthResult(authenticated=False, reason="missing_subject_claim")
+            claims["sub"] = subject
+            return AuthResult(authenticated=True, subject=subject, claims=claims, reason="jwt_unverified_local_decode")
         except Exception:  # noqa: BLE001
             return AuthResult(authenticated=False, reason="invalid_jwt_payload")
 

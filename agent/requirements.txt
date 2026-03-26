@@ -3,6 +3,8 @@ langchain==0.2.14
 boto3==1.40.52
 requests==2.32.3
 bedrock-agentcore==1.2.0
+python-jose==3.3.0
 python-dotenv==1.0.1
 jsonschema==4.23.0
 tenacity==8.5.0
+strands-agents>=1.0.0

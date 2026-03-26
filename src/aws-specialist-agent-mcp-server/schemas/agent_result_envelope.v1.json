@@ -1,0 +1,21 @@
+{
+  "$id": "agent_result_envelope.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentResultEnvelope v1",
+  "type": "object",
+  "required": ["schema_version", "agent_id", "agent_version", "status", "correlation", "result"],
+  "properties": {
+    "schema_version": { "$ref": "base_types.v1.json#/$defs/SchemaVersion" },
+    "agent_id": { "type": "string" },
+    "agent_version": { "type": "string" },
+    "tool_name": { "type": "string" },
+    "status": { "$ref": "base_types.v1.json#/$defs/ResultStatus" },
+    "correlation": { "$ref": "base_types.v1.json#/$defs/Correlation" },
+    "summary": { "type": "string" },
+    "result": { "type": "object" },
+    "policy": { "$ref": "base_types.v1.json#/$defs/PolicyOutcome" },
+    "warnings": { "type": "array", "items": { "$ref": "base_types.v1.json#/$defs/Warning" } },
+    "errors": { "type": "array", "items": { "$ref": "base_types.v1.json#/$defs/Error" } }
+  },
+  "additionalProperties": false
+}

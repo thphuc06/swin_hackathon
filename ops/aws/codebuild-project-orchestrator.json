@@ -1,0 +1,36 @@
+{
+  "name": "jars-orchestrator-runtime-builder",
+  "source": {
+    "type": "S3",
+    "location": "bedrock-agentcore-codebuild-sources-617287375312-us-east-1/jars-orchestrator-runtime/source.zip",
+    "buildspec": "buildspec.yml"
+  },
+  "artifacts": {
+    "type": "NO_ARTIFACTS"
+  },
+  "cache": {
+    "type": "NO_CACHE"
+  },
+  "environment": {
+    "type": "ARM_CONTAINER",
+    "image": "aws/codebuild/amazonlinux2-aarch64-standard:3.0",
+    "computeType": "BUILD_GENERAL1_MEDIUM",
+    "environmentVariables": [
+      {
+        "name": "IMAGE_REPO_URI",
+        "value": "617287375312.dkr.ecr.us-east-1.amazonaws.com/jars-orchestrator-runtime",
+        "type": "PLAINTEXT"
+      },
+      {
+        "name": "IMAGE_REPO_REGISTRY",
+        "value": "617287375312.dkr.ecr.us-east-1.amazonaws.com",
+        "type": "PLAINTEXT"
+      }
+    ],
+    "privilegedMode": true,
+    "imagePullCredentialsType": "CODEBUILD"
+  },
+  "serviceRole": "arn:aws:iam::617287375312:role/AmazonBedrockAgentCoreSDKCodeBuild-us-east-1-jars",
+  "timeoutInMinutes": 60,
+  "queuedTimeoutInMinutes": 480
+}

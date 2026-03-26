@@ -55,7 +55,7 @@ def cashflow_forecast(
     *,
     auth_user_id: str,
     user_id: str,
-    horizon: str = "weekly_12",
+    horizon_days: int = 84,
     scenario_overrides: Dict[str, Any] | None = None,
     as_of: str | None = None,
     trace_id: str | None = None,
@@ -99,64 +99,53 @@ def cashflow_forecast(
 
     net_std = statistics.pstdev(net_history) if len(net_history) > 1 else max(500_000.0, abs(net_history[0]) * 0.2 if net_history else 1_000_000.0)
     overrides = _parse_overrides(scenario_overrides)
+    horizon_days = max(1, int(horizon_days))
+    horizon = f"daily_{horizon_days}"
+    granularity = "daily"
 
     points = []
-    if horizon == "daily_30":
-        horizon_days = 30
-        for step in range(1, horizon_days + 1):
-            point_dt = (as_of_dt + timedelta(days=step)).replace(hour=0, minute=0, second=0, microsecond=0)
-            weekday = point_dt.weekday()
-            income_est = max(0.0, base_income[weekday] * (1 + overrides["income_delta_pct"]) + overrides["income_delta_abs"])
-            spend_est = max(0.0, base_spend[weekday] * (1 + overrides["spend_delta_pct"]) + overrides["spend_delta_abs"])
-            p50 = income_est - spend_est
-            band = max(300_000.0, net_std * 1.28)
-            points.append(
-                {
-                    "period": point_dt.date().isoformat(),
-                    "income_estimate": round(income_est, 2),
-                    "spend_estimate": round(spend_est, 2),
-                    "p10": round(p50 - band, 2),
-                    "p50": round(p50, 2),
-                    "p90": round(p50 + band, 2),
-                }
-            )
-        granularity = "daily"
-    else:
-        horizon_weeks = 12
-        weekly_income_base = statistics.fmean(base_income.values()) * 7 if base_income else 0.0
-        weekly_spend_base = statistics.fmean(base_spend.values()) * 7 if base_spend else 0.0
-        band = max(800_000.0, net_std * 2.56)
-        for step in range(1, horizon_weeks + 1):
-            point_dt = (as_of_dt + timedelta(days=step * 7)).replace(hour=0, minute=0, second=0, microsecond=0)
-            income_est = max(0.0, weekly_income_base * (1 + overrides["income_delta_pct"]) + overrides["income_delta_abs"] * 7)
-            spend_est = max(0.0, weekly_spend_base * (1 + overrides["spend_delta_pct"]) + overrides["spend_delta_abs"] * 7)
-            p50 = income_est - spend_est
-            points.append(
-                {
-                    "period": f"{point_dt.year}-W{point_dt.isocalendar().week:02d}",
-                    "income_estimate": round(income_est, 2),
-                    "spend_estimate": round(spend_est, 2),
-                    "p10": round(p50 - band, 2),
-                    "p50": round(p50, 2),
-                    "p90": round(p50 + band, 2),
-                }
-            )
-        granularity = "weekly"
+    for step in range(1, horizon_days + 1):
+        point_dt = (as_of_dt + timedelta(days=step)).replace(hour=0, minute=0, second=0, microsecond=0)
+        weekday = point_dt.weekday()
+        income_est = max(0.0, base_income[weekday] * (1 + overrides["income_delta_pct"]) + overrides["income_delta_abs"])
+        spend_est = max(0.0, base_spend[weekday] * (1 + overrides["spend_delta_pct"]) + overrides["spend_delta_abs"])
+        p50 = income_est - spend_est
+        band = max(300_000.0, net_std * 1.28)
+        points.append(
+            {
+                "period": point_dt.date().isoformat(),
+                "income_estimate": round(income_est, 2),
+                "spend_estimate": round(spend_est, 2),
+                "p10": round(p50 - band, 2),
+                "p50": round(p50, 2),
+                "p90": round(p50 + band, 2),
+            }
+        )
 
     use_darts = os.getenv("USE_DARTS_FORECAST", "true").strip().lower() in {"1", "true", "yes", "on"}
     darts_result = {"available": False, "engine": "darts_exponential_smoothing"}
     active_model = MODEL_NAME
     if use_darts:
-        darts_result = darts_forecast_points(aligned_day_keys, net_aligned, horizon=horizon)
-        if darts_result.get("available") and darts_result.get("ready"):
-            external_points = darts_result.get("points", [])
-            for idx, point in enumerate(points):
-                if idx >= len(external_points):
-                    break
-                point["p10"] = float(external_points[idx].get("p10", point["p10"]))
-                point["p50"] = float(external_points[idx].get("p50", point["p50"]))
-                point["p90"] = float(external_points[idx].get("p90", point["p90"]))
-            active_model = "darts_exponential_smoothing_v1"
+        if horizon_days == 30:
+            darts_result = darts_forecast_points(aligned_day_keys, net_aligned, horizon=horizon)
+            if darts_result.get("available") and darts_result.get("ready"):
+                external_points = darts_result.get("points", [])
+                for idx, point in enumerate(points):
+                    if idx >= len(external_points):
+                        break
+                    point["p10"] = float(external_points[idx].get("p10", point["p10"]))
+                    point["p50"] = float(external_points[idx].get("p50", point["p50"]))
+                    point["p90"] = float(external_points[idx].get("p90", point["p90"]))
+                active_model = "darts_exponential_smoothing_v1"
+        else:
+            darts_result = {
+                "available": True,
+                "engine": "darts_exponential_smoothing",
+                "ready": False,
+                "reason": "dynamic_horizon_not_supported_by_legacy_adapter",
+                "requested_horizon_days": horizon_days,
+                "points": [],
+            }
 
     p10_avg = statistics.fmean([p["p10"] for p in points]) if points else 0.0
     p50_avg = statistics.fmean([p["p50"] for p in points]) if points else 0.0
@@ -164,11 +153,12 @@ def cashflow_forecast(
 
     tool_input = {
         "user_id": user_id,
-        "horizon": horizon,
+        "horizon_days": horizon_days,
         "as_of": iso_utc(as_of_dt),
         "scenario_overrides": overrides,
     }
     payload = {
+        "horizon_days": horizon_days,
         "horizon": horizon,
         "granularity": granularity,
         "points": points,
