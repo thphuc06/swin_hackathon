@@ -141,7 +141,7 @@ def _process_record(manager, db, record: dict):
         sigma=sigma,
         k_factor=0.5,
         h_factor=5.0,
-        z_score_threshold=4.0,
+        z_score_threshold=3.0,
     )
     detector.cumsum_pos = state_dict["cumsum_pos"]
     detector.cumsum_neg = state_dict["cumsum_neg"]
