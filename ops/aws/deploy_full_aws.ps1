@@ -2,7 +2,7 @@
 param(
     [ValidateSet("All", "Specialist", "Orchestrator", "Gateway")]
     [string]$Component = "All",
-    [string]$SettingsPath = "ops/aws/deploy.settings.json",
+    [string]$SettingsPath = "ops/aws/deploy.settings.terraform.json",
     [string]$Profile,
     [string]$Region,
     [string]$ImageTag,
@@ -38,6 +38,69 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "Deploy.Common.ps1")
+
+function Save-JsonFile {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RelativePath,
+        [Parameter(Mandatory = $true)]
+        $Object
+    )
+
+    $fullPath = Join-RepoPath $RelativePath
+    $json = $Object | ConvertTo-Json -Depth 100
+    [System.IO.File]::WriteAllText($fullPath, $json, $script:Utf8NoBom)
+}
+
+function Save-RuntimeManifestId {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("Specialist", "Orchestrator")]
+        [string]$Name,
+        [AllowEmptyString()]
+        [string]$RuntimeId
+    )
+
+    if ([string]::IsNullOrWhiteSpace($RuntimeId)) {
+        return
+    }
+
+    $manifestPath = Get-RuntimeManifestPath -Name $Name
+    $manifest = Get-RuntimeManifest -ManifestPath $manifestPath
+    if ([string]$manifest.runtimeId -eq $RuntimeId) {
+        return
+    }
+
+    $manifest.runtimeId = $RuntimeId
+    Save-JsonFile -RelativePath $manifestPath -Object $manifest
+    Write-Host "Pinned $Name runtime id '$RuntimeId' in $manifestPath"
+}
+
+function Save-GatewayId {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SettingsPath,
+        [AllowEmptyString()]
+        [string]$GatewayId
+    )
+
+    if ([string]::IsNullOrWhiteSpace($GatewayId)) {
+        return
+    }
+
+    $settingsObject = Get-DeploySettings -SettingsPath $SettingsPath
+    if (-not $settingsObject.gateway) {
+        $settingsObject | Add-Member -MemberType NoteProperty -Name "gateway" -Value ([pscustomobject]@{})
+    }
+
+    if ([string]$settingsObject.gateway.id -eq $GatewayId) {
+        return
+    }
+
+    $settingsObject.gateway.id = $GatewayId
+    Save-JsonFile -RelativePath $SettingsPath -Object $settingsObject
+    Write-Host "Pinned gateway id '$GatewayId' in $SettingsPath"
+}
 
 function Convert-CsvToJsonArray {
     param(
@@ -267,20 +330,27 @@ $gatewayId = $settings.gateway.id
 switch ($Component) {
     "All" {
         $specialistResult = Deploy-Specialist -Settings $settings -Profile $resolvedProfile -Region $resolvedRegion -ImageTag $resolvedImageTag -CognitoUserPoolId $CognitoUserPoolId -CognitoClientId $CognitoClientId -CognitoAllowedClientIds $CognitoAllowedClientIds -CognitoServiceClientIds $CognitoServiceClientIds -SpecialistRuntimeRoleArn $SpecialistRuntimeRoleArn -SupabaseUrl $SupabaseUrl -SupabaseServiceRoleKey $SupabaseServiceRoleKey -StockAgentExternalEnabled $StockAgentExternalEnabled -StockAgentExternalUrl $StockAgentExternalUrl -StockAgentExternalBaseUrl $StockAgentExternalBaseUrl -StockAgentExternalEndpointPath $StockAgentExternalEndpointPath -StockAgentExternalModelProvider $StockAgentExternalModelProvider -StockAgentExternalModel $StockAgentExternalModel -StockAgentExternalAuthToken $StockAgentExternalAuthToken -StockAgentExternalTimeoutSeconds $StockAgentExternalTimeoutSeconds -InstallOptionalFinanceExtras:$InstallOptionalFinanceExtras
+        Save-RuntimeManifestId -Name "Specialist" -RuntimeId $specialistResult.RuntimeId
         $gatewayResult = & (Join-Path $PSScriptRoot "gateway.ps1") -SettingsPath $SettingsPath -Profile $resolvedProfile -Region $resolvedRegion -GatewayName $GatewayName -GatewayRoleArn $GatewayRoleArn -GatewayOauthProviderArn $GatewayOauthProviderArn -CognitoUserPoolId $CognitoUserPoolId -CognitoClientId $CognitoClientId -CognitoAllowedClientIds $CognitoAllowedClientIds -SpecialistRuntimeArn $specialistResult.RuntimeArn -CreateGatewayIfMissing:$CreateGatewayIfMissing
         $gatewayId = $gatewayResult.GatewayId
+        Save-GatewayId -SettingsPath $SettingsPath -GatewayId $gatewayId
         $orchestratorResult = Deploy-Orchestrator -Settings $settings -Profile $resolvedProfile -Region $resolvedRegion -ImageTag $resolvedImageTag -BackendApiBase $BackendApiBase -PolicyAllowedTools $PolicyAllowedTools -GatewayTimeoutSeconds $GatewayTimeoutSeconds -StockAgentExternalEnabled $StockAgentExternalEnabled -StockAgentExternalUrl $StockAgentExternalUrl -StockAgentExternalBaseUrl $StockAgentExternalBaseUrl -StockAgentExternalEndpointPath $StockAgentExternalEndpointPath -StockAgentExternalAuthToken $StockAgentExternalAuthToken -StockAgentExternalModelProvider $StockAgentExternalModelProvider -StockAgentExternalModel $StockAgentExternalModel -StockAgentExternalConnectTimeoutSeconds $StockAgentExternalConnectTimeoutSeconds -StockAgentExternalReadTimeoutSeconds $StockAgentExternalReadTimeoutSeconds -CognitoUserPoolId $CognitoUserPoolId -CognitoClientId $CognitoClientId -CognitoAllowedClientIds $CognitoAllowedClientIds -OrchestratorRuntimeRoleArn $OrchestratorRuntimeRoleArn -GatewayId $gatewayId
+        Save-RuntimeManifestId -Name "Orchestrator" -RuntimeId $orchestratorResult.RuntimeId
     }
     "Specialist" {
         $specialistResult = Deploy-Specialist -Settings $settings -Profile $resolvedProfile -Region $resolvedRegion -ImageTag $resolvedImageTag -CognitoUserPoolId $CognitoUserPoolId -CognitoClientId $CognitoClientId -CognitoAllowedClientIds $CognitoAllowedClientIds -CognitoServiceClientIds $CognitoServiceClientIds -SpecialistRuntimeRoleArn $SpecialistRuntimeRoleArn -SupabaseUrl $SupabaseUrl -SupabaseServiceRoleKey $SupabaseServiceRoleKey -StockAgentExternalEnabled $StockAgentExternalEnabled -StockAgentExternalUrl $StockAgentExternalUrl -StockAgentExternalBaseUrl $StockAgentExternalBaseUrl -StockAgentExternalEndpointPath $StockAgentExternalEndpointPath -StockAgentExternalModelProvider $StockAgentExternalModelProvider -StockAgentExternalModel $StockAgentExternalModel -StockAgentExternalAuthToken $StockAgentExternalAuthToken -StockAgentExternalTimeoutSeconds $StockAgentExternalTimeoutSeconds -InstallOptionalFinanceExtras:$InstallOptionalFinanceExtras
+        Save-RuntimeManifestId -Name "Specialist" -RuntimeId $specialistResult.RuntimeId
         $gatewayResult = & (Join-Path $PSScriptRoot "gateway.ps1") -SettingsPath $SettingsPath -Profile $resolvedProfile -Region $resolvedRegion -GatewayName $GatewayName -GatewayRoleArn $GatewayRoleArn -GatewayOauthProviderArn $GatewayOauthProviderArn -CognitoUserPoolId $CognitoUserPoolId -CognitoClientId $CognitoClientId -CognitoAllowedClientIds $CognitoAllowedClientIds -SpecialistRuntimeArn $specialistResult.RuntimeArn -CreateGatewayIfMissing:$CreateGatewayIfMissing
+        Save-GatewayId -SettingsPath $SettingsPath -GatewayId $gatewayResult.GatewayId
     }
     "Orchestrator" {
         $gatewayId = Resolve-DeploySetting -ExplicitValue $gatewayId -Name "gateway id" -Required
         $orchestratorResult = Deploy-Orchestrator -Settings $settings -Profile $resolvedProfile -Region $resolvedRegion -ImageTag $resolvedImageTag -BackendApiBase $BackendApiBase -PolicyAllowedTools $PolicyAllowedTools -GatewayTimeoutSeconds $GatewayTimeoutSeconds -StockAgentExternalEnabled $StockAgentExternalEnabled -StockAgentExternalUrl $StockAgentExternalUrl -StockAgentExternalBaseUrl $StockAgentExternalBaseUrl -StockAgentExternalEndpointPath $StockAgentExternalEndpointPath -StockAgentExternalAuthToken $StockAgentExternalAuthToken -StockAgentExternalModelProvider $StockAgentExternalModelProvider -StockAgentExternalModel $StockAgentExternalModel -StockAgentExternalConnectTimeoutSeconds $StockAgentExternalConnectTimeoutSeconds -StockAgentExternalReadTimeoutSeconds $StockAgentExternalReadTimeoutSeconds -CognitoUserPoolId $CognitoUserPoolId -CognitoClientId $CognitoClientId -CognitoAllowedClientIds $CognitoAllowedClientIds -OrchestratorRuntimeRoleArn $OrchestratorRuntimeRoleArn -GatewayId $gatewayId
+        Save-RuntimeManifestId -Name "Orchestrator" -RuntimeId $orchestratorResult.RuntimeId
     }
     "Gateway" {
         $gatewayResult = & (Join-Path $PSScriptRoot "gateway.ps1") -SettingsPath $SettingsPath -Profile $resolvedProfile -Region $resolvedRegion -GatewayName $GatewayName -GatewayRoleArn $GatewayRoleArn -GatewayOauthProviderArn $GatewayOauthProviderArn -CognitoUserPoolId $CognitoUserPoolId -CognitoClientId $CognitoClientId -CognitoAllowedClientIds $CognitoAllowedClientIds -CreateGatewayIfMissing:$CreateGatewayIfMissing
+        Save-GatewayId -SettingsPath $SettingsPath -GatewayId $gatewayResult.GatewayId
     }
 }
 

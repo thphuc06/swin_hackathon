@@ -1,6 +1,7 @@
 # general
 .env
 .env.*
+ops/aws/deploy.env
 node_modules
 .next
 out
@@ -45,3 +46,5 @@ file.txt
 backend/tmp/provision_clone_*.json
 backend/tmp/seed_manifest_single_user.json
 backend/tmp/seed_validation_single_user.json
+
+.codegraph

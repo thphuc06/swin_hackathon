@@ -1,0 +1,49 @@
+# Copy to terraform.tfvars and fill in the values.
+# Obtain account-bootstrap outputs with:
+#   terraform -chdir=iac/terraform/account-bootstrap output -json
+
+project_name = "jars"
+app_env      = "staging"
+aws_region   = "us-east-1"
+
+# ── VPC ────────────────────────────────────────────────────────────────
+# Set create_vpc = false and supply existing_vpc_id + existing_public_subnet_ids to reuse a VPC.
+create_vpc         = true
+availability_zones = ["us-east-1a", "us-east-1b"]
+
+# ── Task networking ────────────────────────────────────────────────────
+# true  = tasks get public IPs; no NAT gateway needed (saves ~$32/month).
+# false = tasks in private subnets; requires NAT gateway for outbound internet access.
+assign_public_ip_to_tasks = true
+
+# ── ALB ────────────────────────────────────────────────────────────────
+# Set acm_certificate_arn to enable HTTPS and automatic HTTP→HTTPS redirect.
+# acm_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+alb_idle_timeout = 120
+
+# ── Image ──────────────────────────────────────────────────────────────
+# Build and push with:
+#   docker build --platform linux/amd64 -t <REPO_URI>:<TAG> -f backend/Dockerfile .
+#   docker push <REPO_URI>:<TAG>
+backend_image = "123456789012.dkr.ecr.us-east-1.amazonaws.com/jars-backend:latest-backend"
+
+# ── IAM (from account-bootstrap: terraform output -json iam_role_arns) ─
+ecs_execution_role_arn = "arn:aws:iam::123456789012:role/jars-staging-ecs-execution"
+backend_task_role_arn  = "arn:aws:iam::123456789012:role/jars-staging-backend-task"
+
+# ── Cognito (from account-bootstrap: terraform output -json cognito) ───
+cognito_user_pool_id       = "us-east-1_XXXXXXXXX"
+cognito_client_id          = "xxxxxxxxxxxxxxxxxxxxxxxxxx"
+cognito_allowed_client_ids = "xxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# ── Supabase (plaintext env vars — acceptable for MVP/demo) ────────────
+supabase_url              = "https://<project>.supabase.co"
+supabase_service_role_key = "<supabase-service-role-key>"
+
+# ── Optional: wire AGENTCORE_RUNTIME_ARN after deploy_full_aws.ps1 runs ─
+# Set this to the orchestrator runtime ARN printed at the end of deploy_full_aws.ps1,
+# then re-apply so the backend task can reach the orchestrator.
+# agentcore_runtime_arn = "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/xxxxxxxxxxxxxxxx"
+
+# ── Auth bypass (local/demo only; must be false for staging/prod) ───────
+dev_bypass_auth = false

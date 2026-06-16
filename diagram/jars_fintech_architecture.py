@@ -62,7 +62,7 @@ with Diagram(
 
     with Cluster("API + BFF"):
         apigw = APIGateway("API Gateway")
-        bff = Lambda("BFF (FastAPI)\nLambda/ECS/App Runner")
+        bff = Lambda("BFF (FastAPI)\nECS/Fargate")
 
     with Cluster("Tool Plane (Governed)"):
         gateway = General("AgentCore Gateway\n(MCP)")

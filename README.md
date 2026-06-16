@@ -14,7 +14,9 @@ Current deployed flow:
 - Goal-roadmap generation through a dedicated service specialist that turns planner state into phases, milestones, projections, and banking-service suggestions.
 - Optional stock specialist integration through an external compatibility adapter, with education-only fallback when the external path is disabled or unavailable.
 - Session continuity at two layers: backend-side cached specialist context by chat session, and orchestrator-side session memory.
-- AWS deployment automation for orchestrator runtime, specialist runtime, gateway synchronization, and backend App Runner rollout.
+- AWS deployment automation for orchestrator runtime, specialist runtime, gateway synchronization, and backend ECS/Fargate rollout.
+
+For deployment, follow [`DEPLOY.md`](./DEPLOY.md). It is the single runbook for the AgentCore workflow, ECS/Fargate backend, and frontend E2E demo.
 
 ## Repository Structure
 
@@ -373,7 +375,7 @@ This is designed so external UIs can render both a conversation and structured f
 `ops/aws/deploy.settings.json` is the checked-in deploy default set for profile, region, gateway ID, orchestrator allow list, and build flags. Use it together with:
 
 - `ops/aws/deploy_full_aws.ps1`
-- `ops/aws/deploy_backend_apprunner.ps1`
+- `iac/terraform/ecs-services`
 
 ## Installation and Setup
 
@@ -439,12 +441,7 @@ Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8010/health
 
 ### AWS deployment
 
-Normal deploy flow:
-
-1. `ops/aws/deploy_full_aws.ps1` for specialist, gateway sync, and orchestrator
-2. `ops/aws/deploy_backend_apprunner.ps1` for the backend App Runner service
-
-
+Follow [`DEPLOY.md`](./DEPLOY.md) for the full command sequence.
 
 ## Testing
 
@@ -470,7 +467,7 @@ Live testing is supported via operators and scripts using the deployed backend a
 
 #### Preconditions
 
-- A reachable deployed backend, typically App Runner.
+- A reachable deployed backend, typically the ALB URL from `iac/terraform/ecs-services`.
 - Cognito credentials for a user that actually owns advisory data.
 - Environment that allows `agent/genToken.py` to mint an access token.
 - If needed, provision an aligned advisory principal with `backend/scripts/provision_advisory_principal.py`.
@@ -488,7 +485,7 @@ Export a user-facing TXT artifact from the live backend:
 ```powershell
 python backend/scripts/export_chat_stream_txt.py `
   --prompt "Analyze my finances over the last 6 months." `
-  --endpoint "https://<your-backend-app-runner>/chat/stream" `
+  --endpoint "http://<your-backend-alb-dns>/chat/stream" `
   --output "backend/tmp/financial_analysis_6_months_live.txt"
 ```
 

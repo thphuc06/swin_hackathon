@@ -1,13 +1,13 @@
 {
   "name": "specialist",
   "runtimeName": "JarsSpecialistMcp",
-  "runtimeId": "JarsSpecialistMcp-3j43khBrO7",
+  "runtimeId": "",
   "sourceRoot": "src/aws-specialist-agent-mcp-server",
   "buildspecPath": "ops/aws/buildspec-specialist-arm64.yml",
   "runtimeTemplatePath": "ops/aws/runtime-create-specialist-agent-mcp.template.json",
   "codebuildProjectName": "jars-specialist-agent-mcp-builder",
   "sourceBundleKey": "jars-specialist-agent-mcp/source.zip",
-  "imageRepoUri": "617287375312.dkr.ecr.us-east-1.amazonaws.com/jars-specialist-agent-mcp",
+  "imageRepoUri": "",
   "templateBindings": {
     "IMAGE_TAG": "REPLACE_ME_IMAGE_TAG",
     "IMAGE_REPO_URI": "REPLACE_ME_SPECIALIST_IMAGE_REPO_URI",

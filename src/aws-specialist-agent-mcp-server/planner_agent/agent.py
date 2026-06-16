@@ -110,6 +110,7 @@ def _build_model():
         model_id=_planner_model_id(),
         region_name=_bedrock_region(),
         temperature=_env_float("PLANNER_TEMPERATURE", 0.2),
+        max_tokens=4096,
     )
 
 

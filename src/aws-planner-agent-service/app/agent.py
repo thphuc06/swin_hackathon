@@ -52,7 +52,7 @@ def _build_model() -> Optional[BedrockModel]:
         return None
     region = str(os.getenv("AWS_REGION") or "us-west-2").strip()
     temperature = _env_float("PLANNER_TEMPERATURE", 0.2)
-    return BedrockModel(model_id=model_id, region_name=region, temperature=temperature)
+    return BedrockModel(model_id=model_id, region_name=region, temperature=temperature, max_tokens=4096)
 
 
 def _build_agent(context: PlannerContext, finance_client: MCPClient, kb_client: Optional[MCPClient]) -> Agent:

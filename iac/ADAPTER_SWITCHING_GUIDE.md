@@ -1,5 +1,8 @@
 # Adapter Switching Guide (Local-First -> AWS Swap)
 
+This is not the deploy runbook. For the end-to-end AWS demo deployment, use
+[`../DEPLOY.md`](../DEPLOY.md).
+
 This guide explains how to keep development local and switch to AWS adapters later without changing core logic.
 
 ## 1) Local-first baseline (recommended now)

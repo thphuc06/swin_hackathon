@@ -1,0 +1,32 @@
+project_name = "jars"
+app_env      = "staging"
+aws_region   = "us-east-1"
+aws_profile  = "target-account-profile"
+
+# Leave empty to use: bedrock-agentcore-codebuild-sources-<account>-<region>
+source_bucket_name = ""
+
+backend_service_name       = "jars-backend"
+gateway_name               = "jars-specialist-gateway"
+orchestrator_runtime_name  = "JarsOrchestratorRuntime"
+specialist_runtime_name    = "JarsSpecialistMcp"
+
+# First deploy can use this placeholder. After ecs-services is applied, set this
+# to the alb_dns_name output and re-apply to update the orchestrator config.
+backend_api_base = "https://replace-after-backend-deploy.example.invalid"
+
+# Set this if you already created an AgentCore Gateway OAuth credential provider.
+# If blank, set DEPLOY_GATEWAY_OAUTH_PROVIDER_ARN in PowerShell before gateway deploy.
+gateway_oauth_provider_arn = ""
+
+create_cognito = true
+cognito_callback_urls = [
+  "http://localhost:3000/callback"
+]
+cognito_logout_urls = [
+  "http://localhost:3000/logout"
+]
+
+default_tags = {
+  Owner = "yofina"
+}

@@ -1,7 +1,7 @@
-# IaC Skeleton (MVP)
+# IaC
 
-This folder is a placeholder for post-hackathon scale. It is not wired to the
-current deployment flow.
+For the full demo deployment sequence, use [`../DEPLOY.md`](../DEPLOY.md).
+This file is only a short index of the infrastructure folders.
 
 ## Targets
 
@@ -10,18 +10,34 @@ current deployment flow.
 - AgentCore Policy Engine (Cedar)
 - IAM roles, ECR, CloudWatch logs
 
-## Option A: CDK (recommended)
+## Current Account-Migration Path
 
-- `iac/cdk` to host CDK app
+Use the Terraform bootstrap stack:
 
-## Option B: Terraform
+- `iac/terraform/account-bootstrap`
 
-- `iac/terraform` to host Terraform modules
+It creates the portable AWS foundation for a new account:
 
-## MVP Deploy
+- ECR repositories
+- S3 source bundle bucket
+- CodeBuild image builders
+- IAM roles for AgentCore Runtime, Gateway, CodeBuild, and ECS/Fargate
+- Optional Cognito user pool/client
+- Generated deployment config for the existing `ops/aws` scripts
 
-Use AgentCore Starter Toolkit from `agent/` for now, and configure Gateway
-targets separately (point to the MCP server `/mcp` endpoint).
+AgentCore Runtime/Gateway creation still uses the existing AWS CLI scripts under
+`ops/aws` because AgentCore provider coverage changes faster than the stable AWS
+resources above.
+
+Start here:
+
+```powershell
+cd iac/terraform/account-bootstrap
+Copy-Item terraform.tfvars.example terraform.tfvars
+terraform init
+terraform apply
+.\sync-generated-config.ps1
+```
 
 ## Adapter Switching
 

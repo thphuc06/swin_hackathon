@@ -411,7 +411,7 @@ def run_stock(payload: Dict[str, Any] | SpecialistRequestEnvelope) -> Dict[str, 
     if not url:
         return _local_placeholder_response(
             request,
-            message="STOCK_AGENT_EXTERNAL_URL or STOCK_AGENT_EXTERNAL_BASE_URL must be configured to call the App Runner.",
+            message="STOCK_AGENT_EXTERNAL_URL or STOCK_AGENT_EXTERNAL_BASE_URL must be configured to call the external stock service.",
         )
     try:
         response = requests.post(

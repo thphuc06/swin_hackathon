@@ -1,13 +1,13 @@
 {
   "name": "orchestrator",
   "runtimeName": "JarsOrchestratorRuntime",
-  "runtimeId": "JarsOrchestratorRuntime-Eeg81p3IKb",
+  "runtimeId": "",
   "sourceRoot": "agent",
   "buildspecPath": "ops/aws/buildspec-orchestrator-arm64.yml",
   "runtimeTemplatePath": "ops/aws/runtime-create-orchestrator.template.json",
   "codebuildProjectName": "jars-orchestrator-runtime-builder",
   "sourceBundleKey": "jars-orchestrator-runtime/source.zip",
-  "imageRepoUri": "617287375312.dkr.ecr.us-east-1.amazonaws.com/jars-orchestrator-runtime",
+  "imageRepoUri": "",
   "templateBindings": {
     "IMAGE_TAG": "REPLACE_ME_IMAGE_TAG",
     "IMAGE_REPO_URI": "REPLACE_ME_ORCHESTRATOR_IMAGE_REPO_URI",

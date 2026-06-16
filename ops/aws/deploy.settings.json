@@ -1,11 +1,11 @@
 {
-  "profile": "jars-dev",
+  "profile": "",
   "appEnv": "staging",
   "region": "us-east-1",
-  "accountId": "617287375312",
-  "sourceBucket": "bedrock-agentcore-codebuild-sources-617287375312-us-east-1",
+  "accountId": "",
+  "sourceBucket": "",
   "gateway": {
-    "id": "financial-adviosry-gw-specialist-jgrg0r0ojo",
+    "id": "",
     "createTemplatePath": "ops/aws/gateway-create-specialist.json",
     "targetTemplatePath": "ops/aws/gateway-target-create-specialist.template.json"
   },

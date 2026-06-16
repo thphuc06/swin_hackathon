@@ -99,4 +99,4 @@ Use:
 
 - A standalone planner HTTP deployment for the default planner path.
 - Finance MCP as a required dependency for planner execution.
-- App Runner or any other external stock deployment for the default stock path.
+- A standalone external stock deployment for the default stock path.
